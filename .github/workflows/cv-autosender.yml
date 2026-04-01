@@ -8,7 +8,11 @@ on:
 
 jobs:
   run-sender:
+    name: Run CV Autosender (Instance ${{ matrix.account_index }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        account_index: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -31,4 +35,5 @@ jobs:
           NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
           MASK_LOGS: true
           PYTHONUNBUFFERED: "1"
+          ACCOUNT_INDEX: ${{ matrix.account_index }}
         run: python main.py
