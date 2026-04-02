@@ -60,13 +60,19 @@ def _handle_exit(signum, frame):
     sys.exit(1)
 
 
-def fail_and_notify(job, reason, api_key_to_deactivate=None, smtp_email=None, smtp_password=None):
-    """Mark job as failed, optionally deactivate an API key, send error email."""
+def fail_and_notify(job, reason, api_key_to_deactivate=None, email_to_deactivate=None, smtp_email=None, smtp_password=None):
+    """Mark job as failed, optionally deactivate an API key/email config, send error email."""
     job_id = str(job["_id"])
 
     if api_key_to_deactivate:
         try:
             ai_api_keys.deactivate_api_key(str(api_key_to_deactivate["_id"]))
+        except Exception:
+            pass
+
+    if email_to_deactivate:
+        try:
+            emails.deactivate_email(str(email_to_deactivate["_id"]))
         except Exception:
             pass
 
@@ -369,7 +375,7 @@ def main():
             )
             print("  -> OK")
         except Exception as e:
-            fail_and_notify(job, f"Failed to send CV email via SMTP — {e}", smtp_email=smtp_email, smtp_password=smtp_password)
+            fail_and_notify(job, f"Failed to send CV email via SMTP — {e}", email_to_deactivate=email_config, smtp_email=smtp_email, smtp_password=smtp_password)
 
         # ── Step 20: Update Job as Sent ───────────────────────────────────
         print("  ")
