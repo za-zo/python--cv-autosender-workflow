@@ -1,5 +1,7 @@
 import requests
 
+MODEL_NAME = "glm-4.7-flash"
+
 def call(api_key, system_msg, user_msg):
     resp = requests.post(
         "https://api.z.ai/api/paas/v4/chat/completions",
@@ -8,7 +10,7 @@ def call(api_key, system_msg, user_msg):
             "Authorization": f"Bearer {api_key}",
         },
         json={
-            "model": "glm-4.7-flash",
+            "model": MODEL_NAME,
             "messages": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},

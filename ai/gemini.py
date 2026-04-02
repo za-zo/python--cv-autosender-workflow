@@ -1,7 +1,9 @@
 import requests
 
+MODEL_NAME = "gemini-2.5-flash"
+
 def call(api_key, system_msg, user_msg):
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={api_key}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL_NAME}:generateContent?key={api_key}"
     resp = requests.post(
         url,
         headers={"Content-Type": "application/json"},

@@ -1,8 +1,10 @@
 import requests
 
+MODEL_NAME = "openai/o4-mini"
+
 def call(api_key, system_msg, user_msg):
     resp = requests.post(
-        "https://api.bytez.com/models/v2/openai/o4-mini",
+        f"https://api.bytez.com/models/v2/{MODEL_NAME}",
         headers={"Authorization": api_key, "Content-Type": "application/json"},
         json={
             "messages": [

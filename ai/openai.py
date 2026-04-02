@@ -1,5 +1,7 @@
 import requests
 
+MODEL_NAME = "gpt-4o-mini"
+
 def call(api_key, system_msg, user_msg):
     resp = requests.post(
         "https://api.openai.com/v1/responses",
@@ -8,7 +10,7 @@ def call(api_key, system_msg, user_msg):
             "Authorization": f"Bearer {api_key}",
         },
         json={
-            "model": "gpt-4o-mini",
+            "model": MODEL_NAME,
             "input": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
