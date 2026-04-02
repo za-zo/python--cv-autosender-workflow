@@ -201,7 +201,7 @@ def main():
         cv_provider = providers.get_provider(cv_api_key["provider"])
         if not cv_provider:
             fail_and_notify(job, "CV API Key Provider not found", smtp_email=smtp_email, smtp_password=smtp_password)
-        print(f"  -> Provider: {mask(cv_provider.get('name', ''))}")
+        print(f"  -> Provider: {mask(cv_provider.get('name', ''))} | Model Name: {mask(cv_provider.get('model_name', ''))}")
 
         # ── Step 08: Read Message API Key Provider ────────────────────────
         print("  ")
@@ -209,7 +209,7 @@ def main():
         msg_provider = providers.get_provider(msg_api_key["provider"])
         if not msg_provider:
             fail_and_notify(job, "Message API Key Provider not found", smtp_email=smtp_email, smtp_password=smtp_password)
-        print(f"  -> Provider: {mask(msg_provider.get('name', ''))}")
+        print(f"  -> Provider: {mask(msg_provider.get('name', ''))} | Model Name: {mask(msg_provider.get('model_name', ''))}")
 
         # ── Step 09: Read Profile ─────────────────────────────────────────
         print("  ")
