@@ -1,7 +1,7 @@
 import json
 import re
 
-def build_cv_prompt(profile, company, job, web_content):
+def build_cv_prompt(profile, company, job):
     """Build CV generation prompt (port of n8n 'Code - Préparer Prompt CV')."""
     system_message = (
         "Tu es un expert en rédaction de CV professionnels.\n"
@@ -36,8 +36,7 @@ def build_cv_prompt(profile, company, job, web_content):
         f"Localisation : {company.get('location', '')}\n"
         f"Description : {company.get('description', '')}\n"
         f"Technologies : {', '.join(company.get('technologies', []))}\n"
-        f"Projets entreprise : {json.dumps(company.get('projects', []), default=str)}\n"
-        f"Contenu site web : {(web_content[:1500] if web_content else 'Non disponible')}\n\n"
+        f"Projets entreprise : {json.dumps(company.get('projects', []), default=str)}\n\n"
         "=== POSTE VISÉ ===\n"
         f"Titre : {job.get('targetPosition', '')}\n"
         f"Description : {job.get('jobDescription', '')}\n"
@@ -69,7 +68,7 @@ def build_cv_prompt(profile, company, job, web_content):
     return system_message, user_message
 
 
-def build_message_prompt(profile, company, job, web_content):
+def build_message_prompt(profile, company, job):
     """Build message generation prompt (port of n8n 'Code - Préparer Prompt Message')."""
     raw = (job.get("cv_language") or "").lower().strip()
     if raw in ("anglais", "english", "en"):
@@ -141,8 +140,7 @@ def build_message_prompt(profile, company, job, web_content):
         f"Email: {company.get('email', '')}\n"
         f"Sector: {company.get('sector', '')}\n"
         f"Description: {company.get('description', '')}\n"
-        f"Technologies: {', '.join(company.get('technologies', []))}\n"
-        f"Website content: {(web_content[:800] if web_content else 'Not available')}\n\n"
+        f"Technologies: {', '.join(company.get('technologies', []))}\n\n"
         "=== JOB ===\n"
         f"Position: {job.get('targetPosition', '')}\n"
         f"Job Description: {job.get('jobDescription', '')}\n"

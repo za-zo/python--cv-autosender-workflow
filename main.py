@@ -18,7 +18,7 @@ from ai.base import (
 from db import ai_api_keys, companies, emails, jobs, profiles, providers
 from helpers.email_sender import send_email
 from helpers.html_cv import generate_html_cv
-from helpers.scraper import scrape_website
+
 
 
 def mask(val, kind="str"):
@@ -227,24 +227,15 @@ def main():
             fail_and_notify(job, "Company not found", smtp_email=smtp_email, smtp_password=smtp_password)
         print(f"  -> {mask(company.get('name', ''))} | {mask(company.get('email', ''), 'email')}")
 
-        # ── Step 11: Scrape Company Website ───────────────────────────────
+        # ── Step 11: Build CV Prompt ──────────────────────────────────────
         print("  ")
-        print("[Step 11] Scraping company website...")
-        web_content = scrape_website(company.get("website"))
-        if web_content:
-            print(f"  -> OK ({len(web_content)} chars)")
-        else:
-            print(f"  -> Skipped (no content)")
-
-        # ── Step 12: Build CV Prompt ──────────────────────────────────────
-        print("  ")
-        print("[Step 12] Building CV prompt...")
-        cv_system_msg, cv_user_msg = build_cv_prompt(profile, company, job, web_content)
+        print("[Step 11] Building CV prompt...")
+        cv_system_msg, cv_user_msg = build_cv_prompt(profile, company, job)
         print(f"  -> OK (prompt: {len(cv_user_msg)} chars)")
 
-        # ── Step 13: Generate CV via AI API ───────────────────────────────
+        # ── Step 12: Generate CV via AI API ───────────────────────────────
         print("  ")
-        print(f"[Step 13] Generating CV via {mask(cv_provider['name'])}...")
+        print(f"[Step 12] Generating CV via {mask(cv_provider['name'])}...")
         cv_provider_module = get_provider_module(cv_provider["name"])
         try:
             cv_raw_response = call_ai_with_retries(
@@ -260,9 +251,9 @@ def main():
                 smtp_email=smtp_email, smtp_password=smtp_password,
             )
 
-        # ── Step 14: Parse CV Response ────────────────────────────────────
+        # ── Step 13: Parse CV Response ────────────────────────────────────
         print("  ")
-        print("[Step 14] Parsing CV response...")
+        print("[Step 13] Parsing CV response...")
         try:
             cv_data = parse_cv_response(cv_provider["name"], cv_raw_response)
             skills = cv_data.get("skills", [])
@@ -274,23 +265,23 @@ def main():
                 smtp_email=smtp_email, smtp_password=smtp_password,
             )
 
-        # ── Step 15: Generate HTML CV ─────────────────────────────────────
+        # ── Step 14: Generate HTML CV ─────────────────────────────────────
         print("  ")
-        print("[Step 15] Generating HTML CV...")
+        print("[Step 14] Generating HTML CV...")
         html_content = generate_html_cv(cv_data, profile, job)
         print(f"  -> OK ({len(html_content)} chars)")
 
-        # ── Step 16: Build Message Prompt ─────────────────────────────────
+        # ── Step 15: Build Message Prompt ─────────────────────────────────
         print("  ")
-        print("[Step 16] Building message prompt...")
+        print("[Step 15] Building message prompt...")
         msg_system_msg, msg_user_msg, msg_lang = build_message_prompt(
-            profile, company, job, web_content
+            profile, company, job
         )
         print(f"  -> OK (lang: {mask(msg_lang)}, prompt: {len(msg_user_msg)} chars)")
 
-        # ── Step 17: Generate Message via AI API ──────────────────────────
+        # ── Step 16: Generate Message via AI API ──────────────────────────
         print("  ")
-        print(f"[Step 17] Generating message via {mask(msg_provider['name'])}...")
+        print(f"[Step 16] Generating message via {mask(msg_provider['name'])}...")
         msg_provider_module = get_provider_module(msg_provider["name"])
         try:
             msg_raw_response = call_ai_with_retries(
@@ -306,9 +297,9 @@ def main():
                 smtp_email=smtp_email, smtp_password=smtp_password,
             )
 
-        # ── Step 18: Parse Message Response ───────────────────────────────
+        # ── Step 17: Parse Message Response ───────────────────────────────
         print("  ")
-        print("[Step 18] Parsing message response...")
+        print("[Step 17] Parsing message response...")
         try:
             message_text = parse_message_response(msg_provider["name"], msg_raw_response)
             print(f"  -> OK ({len(message_text)} chars)")
@@ -319,9 +310,9 @@ def main():
                 smtp_email=smtp_email, smtp_password=smtp_password,
             )
 
-        # ── Step 19: Convert HTML to PDF ──────────────────────────────────
+        # ── Step 18: Convert HTML to PDF ──────────────────────────────────
         print("  ")
-        print("[Step 19] Converting HTML to PDF...")
+        print("[Step 18] Converting HTML to PDF...")
         pdf_base64 = None
         for attempt in range(1, config.MAX_RETRIES + 1):
             try:
@@ -360,9 +351,9 @@ def main():
         pdf_path = tmp_pdf.name
         print(f"  -> OK ({len(pdf_bytes)} bytes)")
 
-        # ── Step 20: Send CV Email via SMTP ───────────────────────────────
+        # ── Step 19: Send CV Email via SMTP ───────────────────────────────
         print("  ")
-        print(f"[Step 20] Sending CV email to {mask(company.get('email', ''), 'email')}...")
+        print(f"[Step 19] Sending CV email to {mask(company.get('email', ''), 'email')}...")
         subject = (
             f"Candidature — {job.get('targetPosition', '')} | "
             f"{profile.get('firstName', '')} {profile.get('lastName', '')}"
@@ -380,15 +371,15 @@ def main():
         except Exception as e:
             fail_and_notify(job, f"Failed to send CV email via SMTP — {e}", smtp_email=smtp_email, smtp_password=smtp_password)
 
-        # ── Step 21: Update Job as Sent ───────────────────────────────────
+        # ── Step 20: Update Job as Sent ───────────────────────────────────
         print("  ")
-        print("[Step 21] Updating job as sent...")
+        print("[Step 20] Updating job as sent...")
         jobs.mark_sent(job_id, message_text)
         print("  -> OK (status: sent)")
 
-        # ── Step 22: Send Confirmation Email ──────────────────────────────
+        # ── Step 21: Send Confirmation Email ──────────────────────────────
         print("  ")
-        print("[Step 22] Sending confirmation email...")
+        print("[Step 21] Sending confirmation email...")
         confirm_subject = (
             f"✅ CV envoyé — {job.get('targetPosition', '')} @ {company.get('name', '')}"
         )
