@@ -12,7 +12,8 @@ def call(api_key, system_msg, user_msg, model_name="@cf/meta/llama-3.3-70b-instr
             "messages": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
-            ]
+            ],
+            "max_tokens": 4096,
         },
         timeout=60,
     )

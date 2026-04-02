@@ -195,6 +195,8 @@ def _extract_content(provider_name, response_json):
 def parse_cv_response(provider_name, response_json):
     """Parse CV response from any provider (port of n8n 'Code - Parser Réponse')."""
     content = _extract_content(provider_name, response_json)
+    if isinstance(content, dict):
+        return content
     clean = re.sub(r"```json|```", "", content).strip()
     return json.loads(clean)
 
@@ -202,6 +204,8 @@ def parse_cv_response(provider_name, response_json):
 def parse_message_response(provider_name, response_json):
     """Parse message response from any provider (port of n8n 'Code - Parser Message')."""
     message = _extract_content(provider_name, response_json)
+    if isinstance(message, dict):
+        message = json.dumps(message)
     # Clean: remove surrounding quotes, fix escaped newlines/tabs
     message = re.sub(r'^[\'"]+|[\'"]+$', "", message)
     message = message.replace("\\n", "\n").replace("\\t", "\t").strip()
