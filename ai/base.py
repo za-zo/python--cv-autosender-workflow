@@ -179,6 +179,8 @@ def parse_cv_response(provider_name, response_json):
         content = response_json["choices"][0]["message"]["content"]
     elif "hugging face" in name:
         content = response_json["choices"][0]["message"]["content"]
+    elif "cerebras" in name:
+        content = response_json["choices"][0]["message"]["content"]
     else:
         raise ValueError(f"Unknown provider: {provider_name}")
 
@@ -202,6 +204,8 @@ def parse_message_response(provider_name, response_json):
     elif "z.ai" in name:
         message = response_json["choices"][0]["message"]["content"]
     elif "hugging face" in name:
+        message = response_json["choices"][0]["message"]["content"]
+    elif "cerebras" in name:
         message = response_json["choices"][0]["message"]["content"]
     else:
         raise ValueError(f"Unknown provider: {provider_name}")

@@ -1,4 +1,4 @@
-from ai import bytez, groq, gemini, openai, openrouter, zai, hugging_face
+from ai import bytez, groq, gemini, openai, openrouter, zai, hugging_face, cerebras
 
 PROVIDERS = {
     "bytez": bytez,
@@ -8,6 +8,7 @@ PROVIDERS = {
     "openrouter": openrouter,
     "z.ai": zai,
     "hugging face": hugging_face,
+    "cerebras": cerebras,
 }
 
 def get_provider_module(provider_name):
