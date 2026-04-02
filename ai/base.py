@@ -192,6 +192,8 @@ def _extract_content(provider_name, response_json):
         return response_json["result"]["response"]
     elif "cohere" in name:
         return response_json["message"]["content"][0]["text"]
+    elif "sambanova" in name:
+        return response_json["choices"][0]["message"]["content"]
     raise ValueError(f"Unknown provider: {provider_name}")
 
 
