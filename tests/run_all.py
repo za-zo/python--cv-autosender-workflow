@@ -3,7 +3,7 @@
 import sys, os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
-from tests import test_bytez, test_groq, test_gemini, test_openai, test_openrouter, test_zai
+from tests import test_bytez, test_groq, test_gemini, test_openai, test_openrouter, test_zai, test_hugging_face
 
 providers = [
     ("Bytez", test_bytez),
@@ -12,6 +12,7 @@ providers = [
     ("OpenAI", test_openai),
     ("OpenRouter", test_openrouter),
     ("Z.ai", test_zai),
+    ("Hugging Face", test_hugging_face),
 ]
 
 results = {}
