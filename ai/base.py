@@ -116,7 +116,8 @@ def build_message_prompt(profile, company, job):
         f"ABSOLUTE RULE 3: Salutation, body, closing and name are ALL in {lang}.\n"
         "ABSOLUTE RULE 4: Return ONLY the cover letter text. No JSON, no keys, no wrapper, no markdown. Just the raw letter.\n"
         "ABSOLUTE RULE 5: Do NOT wrap the letter in quotes. Output raw unquoted text only.\n"
-        f"ABSOLUTE RULE 6: This letter will be sent DIRECTLY as an email body without any modification. Write it email-ready: proper greeting, clean paragraphs, and a professional closing. No placeholders, no notes, no comments, nothing extra — only the final letter text."
+        f"ABSOLUTE RULE 6: This letter will be sent DIRECTLY as an email body without any modification. Write it email-ready: proper greeting, clean paragraphs, and a professional closing. No placeholders, no notes, no comments, nothing extra — only the final letter text.\n"
+        "ABSOLUTE RULE 7: NEVER use markdown formatting. No **bold**, no *italic*, no _underline_, no # headings, no bullet points with -, no backticks, no markdown syntax of any kind. Use only plain text. This will be displayed as raw text in an email — any markdown will look suspicious and unprofessional."
     )
 
     example = examples.get(lang, examples["French"])
@@ -211,4 +212,9 @@ def parse_message_response(provider_name, response_json):
     # Clean: remove surrounding quotes, fix escaped newlines/tabs
     message = re.sub(r'^[\'"]+|[\'"]+$', "", message)
     message = message.replace("\\n", "\n").replace("\\t", "\t").strip()
+    # Strip markdown formatting
+    message = re.sub(r"\*\*(.+?)\*\*", r"\1", message)  # **bold** -> bold
+    message = re.sub(r"\*(.+?)\*", r"\1", message)        # *italic* -> italic
+    message = re.sub(r"_(.+?)_", r"\1", message)           # _underline_ -> underline
+    message = re.sub(r"`(.+?)`", r"\1", message)           # `code` -> code
     return message
