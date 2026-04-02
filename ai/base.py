@@ -168,54 +168,40 @@ def build_message_prompt(profile, company, job):
     return system_message, user_message, lang
 
 
-def parse_cv_response(provider_name, response_json):
-    """Parse CV response from any provider (port of n8n 'Code - Parser Réponse')."""
+def _extract_content(provider_name, response_json):
+    """Extract the text content from any provider's response JSON."""
     name = provider_name.lower()
     if "bytez" in name:
-        content = response_json["output"]["content"]
+        return response_json["output"]["content"]
     elif "groq" in name:
-        content = response_json["choices"][0]["message"]["content"]
+        return response_json["choices"][0]["message"]["content"]
     elif "gemini" in name:
-        content = response_json["candidates"][0]["content"]["parts"][0]["text"]
+        return response_json["candidates"][0]["content"]["parts"][0]["text"]
     elif "openai" in name:
-        content = response_json["output"][0]["content"][0]["text"]
+        return response_json["output"][0]["content"][0]["text"]
     elif "openrouter" in name:
-        content = response_json["choices"][0]["message"]["content"]
+        return response_json["choices"][0]["message"]["content"]
     elif "z.ai" in name:
-        content = response_json["choices"][0]["message"]["content"]
+        return response_json["choices"][0]["message"]["content"]
     elif "hugging face" in name:
-        content = response_json["choices"][0]["message"]["content"]
+        return response_json["choices"][0]["message"]["content"]
     elif "cerebras" in name:
-        content = response_json["choices"][0]["message"]["content"]
-    else:
-        raise ValueError(f"Unknown provider: {provider_name}")
+        return response_json["choices"][0]["message"]["content"]
+    elif "cloudflare" in name:
+        return response_json["result"]["response"]
+    raise ValueError(f"Unknown provider: {provider_name}")
 
+
+def parse_cv_response(provider_name, response_json):
+    """Parse CV response from any provider (port of n8n 'Code - Parser Réponse')."""
+    content = _extract_content(provider_name, response_json)
     clean = re.sub(r"```json|```", "", content).strip()
     return json.loads(clean)
 
 
 def parse_message_response(provider_name, response_json):
     """Parse message response from any provider (port of n8n 'Code - Parser Message')."""
-    name = provider_name.lower()
-    if "bytez" in name:
-        message = response_json["output"]["content"]
-    elif "groq" in name:
-        message = response_json["choices"][0]["message"]["content"]
-    elif "gemini" in name:
-        message = response_json["candidates"][0]["content"]["parts"][0]["text"]
-    elif "openai" in name:
-        message = response_json["output"][0]["content"][0]["text"]
-    elif "openrouter" in name:
-        message = response_json["choices"][0]["message"]["content"]
-    elif "z.ai" in name:
-        message = response_json["choices"][0]["message"]["content"]
-    elif "hugging face" in name:
-        message = response_json["choices"][0]["message"]["content"]
-    elif "cerebras" in name:
-        message = response_json["choices"][0]["message"]["content"]
-    else:
-        raise ValueError(f"Unknown provider: {provider_name}")
-
+    message = _extract_content(provider_name, response_json)
     # Clean: remove surrounding quotes, fix escaped newlines/tabs
     message = re.sub(r'^[\'"]+|[\'"]+$', "", message)
     message = message.replace("\\n", "\n").replace("\\t", "\t").strip()
