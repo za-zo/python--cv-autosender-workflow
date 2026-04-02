@@ -20,7 +20,7 @@ def test_cv_response():
 
     print(f"[TEST] groq CV response — using key: {api_key['name']}")
     try:
-        resp = groq.call(api_key["apiKey"], SYSTEM_MSG, USER_MSG)
+        resp = groq.call(api_key["apiKey"], SYSTEM_MSG, USER_MSG, model_name=provider.get("model_name"))
         print(f"[OK] API call succeeded")
 
         content = parse_cv_response(provider["name"], resp)
@@ -39,7 +39,7 @@ def test_message_response():
 
     print(f"[TEST] groq Message response — using key: {api_key['name']}")
     try:
-        resp = groq.call(api_key["apiKey"], SYSTEM_MSG_MSG, USER_MSG_MSG)
+        resp = groq.call(api_key["apiKey"], SYSTEM_MSG_MSG, USER_MSG_MSG, model_name=provider.get("model_name"))
         print(f"[OK] API call succeeded")
 
         message = parse_message_response(provider["name"], resp)

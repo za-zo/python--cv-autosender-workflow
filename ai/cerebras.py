@@ -1,8 +1,6 @@
 import requests
 
-MODEL_NAME = "llama3.1-8b"
-
-def call(api_key, system_msg, user_msg):
+def call(api_key, system_msg, user_msg, model_name="llama3.1-8b"):
     resp = requests.post(
         "https://api.cerebras.ai/v1/chat/completions",
         headers={
@@ -10,7 +8,7 @@ def call(api_key, system_msg, user_msg):
             "Authorization": f"Bearer {api_key}",
         },
         json={
-            "model": MODEL_NAME,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},

@@ -109,12 +109,12 @@ def fail_and_notify(job, reason, api_key_to_deactivate=None, smtp_email=None, sm
     exit(1)
 
 
-def call_ai_with_retries(provider_module, api_key, system_msg, user_msg):
+def call_ai_with_retries(provider_module, api_key, system_msg, user_msg, model_name=None):
     """Call AI provider with retry logic."""
     last_error = None
     for attempt in range(1, config.MAX_RETRIES + 1):
         try:
-            return provider_module.call(api_key, system_msg, user_msg)
+            return provider_module.call(api_key, system_msg, user_msg, model_name=model_name)
         except Exception as e:
             last_error = e
             if attempt < config.MAX_RETRIES:
@@ -248,7 +248,8 @@ def main():
         cv_provider_module = get_provider_module(cv_provider["name"])
         try:
             cv_raw_response = call_ai_with_retries(
-                cv_provider_module, cv_api_key["apiKey"], cv_system_msg, cv_user_msg
+                cv_provider_module, cv_api_key["apiKey"], cv_system_msg, cv_user_msg,
+                model_name=cv_provider.get("model_name"),
             )
             print("  -> OK")
         except Exception as e:
@@ -293,7 +294,8 @@ def main():
         msg_provider_module = get_provider_module(msg_provider["name"])
         try:
             msg_raw_response = call_ai_with_retries(
-                msg_provider_module, msg_api_key["apiKey"], msg_system_msg, msg_user_msg
+                msg_provider_module, msg_api_key["apiKey"], msg_system_msg, msg_user_msg,
+                model_name=msg_provider.get("model_name"),
             )
             print("  -> OK")
         except Exception as e:

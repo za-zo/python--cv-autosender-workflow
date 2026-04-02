@@ -1,8 +1,6 @@
 import requests
 
-MODEL_NAME = "openai/gpt-oss-120b:fastest"
-
-def call(api_key, system_msg, user_msg):
+def call(api_key, system_msg, user_msg, model_name="openai/gpt-oss-120b:fastest"):
     # Hugging Face Inference API provides an OpenAI-compatible endpoint at /v1/chat/completions
     url = "https://router.huggingface.co/v1/chat/completions"
 
@@ -13,7 +11,7 @@ def call(api_key, system_msg, user_msg):
             "Authorization": f"Bearer {api_key}",
         },
         json={
-            "model": MODEL_NAME,
+            "model": model_name,
             "messages": [
                 {"role": "system", "content": system_msg},
                 {"role": "user", "content": user_msg},
