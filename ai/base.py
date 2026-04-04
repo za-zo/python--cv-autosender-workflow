@@ -160,7 +160,7 @@ def build_message_prompt(profile, company, job):
         f"1. Write entirely in {lang} — salutation, body, closing, name\n"
         "2. Technology names stay in English\n"
         "3. Mention specific company elements\n"
-        "4. Include portfolio/GitHub links naturally in the body\n"
+        "4. If GitHub or Portfolio links are provided (non-empty), you MUST include them in the body. This is REQUIRED — never omit them when they exist\n"
         "5. No placeholders, no subject line, no title\n"
         "6. Maximum 200 words\n"
         "7. End with a polite closing phrase then the full candidate name"
