@@ -213,10 +213,10 @@ def parse_message_response(provider_name, response_json):
         message = json.dumps(message)
     # Clean: remove surrounding quotes, fix escaped newlines/tabs
     message = re.sub(r'^[\'"]+|[\'"]+$', "", message)
-    message = message.replace("\\n", "\n").replace("\\t", "\t").strip()
+    message = message.replace("\\n", "\n").replace("\\t", "\t").replace('\\"', '"').replace("\\'", "'").strip()
     # Strip markdown formatting
-    message = re.sub(r"\*\*(.+?)\*\*", r"\1", message)  # **bold** -> bold
-    message = re.sub(r"\*(.+?)\*", r"\1", message)        # *italic* -> italic
+    message = re.sub(r"\*\*(.+?)\*\*", r"\1", message)     # **bold** -> bold
+    message = re.sub(r"\*(.+?)\*", r"\1", message)         # *italic* -> italic
     message = re.sub(r"_(.+?)_", r"\1", message)           # _underline_ -> underline
     message = re.sub(r"`(.+?)`", r"\1", message)           # `code` -> code
     return message
