@@ -47,6 +47,8 @@ jobs:
     needs: run-sender
     runs-on: ubuntu-latest
     if: always()
+    permissions:
+      actions: write
     steps:
       - name: Trigger next run
         env:
@@ -54,4 +56,4 @@ jobs:
         run: |
           echo "Waiting 30 seconds before re-triggering..."
           sleep 30
-          gh workflow run cv-autosender.yml
+          gh workflow run cv-autosender.yml -R ${{ github.repository }}
