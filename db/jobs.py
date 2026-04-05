@@ -65,3 +65,8 @@ def release_job(job_id):
         {"_id": ObjectId(job_id)},
         {"$set": {"in_use": False}},
     )
+
+def has_active_jobs():
+    """Check if there are any active jobs remaining."""
+    db = get_db()
+    return db.jobs.count_documents({"active": True}) > 0
