@@ -11,6 +11,7 @@ jobs:
     name: Run CV Autosender (Instance ${{ matrix.account_index }})
     runs-on: ubuntu-latest
     strategy:
+      fail-fast: false
       matrix:
         account_index: [1, 2, 3, 4, 5, 6, 7]
     steps:
