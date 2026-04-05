@@ -32,16 +32,11 @@ def mark_sent(
         "sentAt": datetime.now(timezone.utc),
         "generatedMessage": generated_message,
     }
-    if email_id is not None:
-        fields["emailId"] = ObjectId(str(email_id))
-    if cv_api_key_id is not None:
-        fields["ai_api_key_id_for_cv_gen"] = ObjectId(str(cv_api_key_id))
-    if msg_api_key_id is not None:
-        fields["ai_api_key_id_for_message_gen"] = ObjectId(str(msg_api_key_id))
     db.jobs.update_one(
         {"_id": ObjectId(job_id)},
         {"$set": fields},
     )
+
 
 def mark_failed(job_id, reason):
     """Mark job as failed with a clear reason."""
