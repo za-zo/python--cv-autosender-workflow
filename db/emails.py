@@ -36,21 +36,23 @@ def claim_email_by_id(email_id):
     )
 
 
-def claim_random_email(max_attempts=8):
-    """Claim a random available email from the pool (sample + atomic update)."""
+def claim_available_email(max_attempts=8):
+    """Claim an available email from the pool, prioritized by least usageCount."""
     db = get_db()
     for _ in range(max_attempts):
-        sample = list(
+        candidates = list(
             db.emails.aggregate(
                 [
                     {"$match": _POOL_FILTER},
-                    {"$sample": {"size": 1}},
+                    {"$sort": {"usageCount": 1}},
+                    {"$limit": 1},
                 ]
             )
         )
-        if not sample:
+        if not candidates:
             return None
-        oid = sample[0]["_id"]
+        
+        oid = candidates[0]["_id"]
         doc = db.emails.find_one_and_update(
             {
                 "_id": oid,

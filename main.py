@@ -373,7 +373,7 @@ def main():
             if raw_email_id:
                 email_config = emails.claim_email_by_id(raw_email_id)
             else:
-                email_config = emails.claim_random_email()
+                email_config = emails.claim_available_email()
             if not email_config:
                 _fail_email_claim(job, raw_email_id)
             _claimed_email_id = str(email_config["_id"])
@@ -400,7 +400,7 @@ def main():
             if raw_cv_id:
                 cv_api_key = ai_api_keys.claim_api_key_by_id(raw_cv_id)
             else:
-                cv_api_key = ai_api_keys.claim_random_api_key()
+                cv_api_key = ai_api_keys.claim_available_api_key()
             if not cv_api_key:
                 _fail_cv_key_claim(job, raw_cv_id, email_config, smtp_email, smtp_password)
             _claimed_cv_api_key_id = str(cv_api_key["_id"])
@@ -432,7 +432,7 @@ def main():
             elif raw_msg_id:
                 msg_api_key = ai_api_keys.claim_api_key_by_id(raw_msg_id)
             else:
-                msg_api_key = ai_api_keys.claim_random_api_key()
+                msg_api_key = ai_api_keys.claim_available_api_key()
             if not msg_api_key:
                 _fail_msg_key_claim(
                     job, raw_msg_id, email_config, smtp_email, smtp_password, cv_api_key
