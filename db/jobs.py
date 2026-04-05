@@ -14,21 +14,33 @@ def claim_job():
         sort=[("createdAt", 1)],
     )
 
-def mark_sent(job_id, generated_message):
-    """Mark job as successfully sent."""
+def mark_sent(
+    job_id,
+    generated_message,
+    *,
+    email_id=None,
+    cv_api_key_id=None,
+    msg_api_key_id=None,
+):
+    """Mark job as successfully sent; optionally persist which email/API keys were used."""
     db = get_db()
+    fields = {
+        "active": False,
+        "in_use": False,
+        "status": "sent",
+        "failed_reason": None,
+        "sentAt": datetime.now(timezone.utc),
+        "generatedMessage": generated_message,
+    }
+    if email_id is not None:
+        fields["emailId"] = ObjectId(str(email_id))
+    if cv_api_key_id is not None:
+        fields["ai_api_key_id_for_cv_gen"] = ObjectId(str(cv_api_key_id))
+    if msg_api_key_id is not None:
+        fields["ai_api_key_id_for_message_gen"] = ObjectId(str(msg_api_key_id))
     db.jobs.update_one(
         {"_id": ObjectId(job_id)},
-        {
-            "$set": {
-                "active": False,
-                "in_use": False,
-                "status": "sent",
-                "failed_reason": None,
-                "sentAt": datetime.now(timezone.utc),
-                "generatedMessage": generated_message,
-            }
-        },
+        {"$set": fields},
     )
 
 def mark_failed(job_id, reason):

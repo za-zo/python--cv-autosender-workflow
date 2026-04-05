@@ -434,6 +434,7 @@ def main():
                 model_name=cv_provider.get("model_name"),
             )
             print("  -> OK")
+            ai_api_keys.increment_api_key_stats(_claimed_cv_api_key_id, "success")
         except Exception as e:
             ai_api_keys.increment_api_key_stats(_claimed_cv_api_key_id, "failed")
             fail_and_notify(
@@ -458,7 +459,6 @@ def main():
             skills = cv_data.get("skills", [])
             print(f"  -> OK (skills: {len(skills)}, projects: {len(cv_data.get('projects', []))})")
         except Exception as e:
-            ai_api_keys.increment_api_key_stats(_claimed_cv_api_key_id, "failed")
             fail_and_notify(
                 job,
                 f"CV generation: AI response is not valid JSON — {e}",
@@ -471,8 +471,6 @@ def main():
                 cv_provider=cv_provider,
                 msg_provider=msg_provider,
             )
-
-        ai_api_keys.increment_api_key_stats(_claimed_cv_api_key_id, "success")
 
         print("  ")
         print("[Step 12] Generating HTML CV...")
@@ -498,6 +496,7 @@ def main():
                 model_name=msg_provider.get("model_name"),
             )
             print("  -> OK")
+            ai_api_keys.increment_api_key_stats(_claimed_msg_api_key_id, "success")
         except Exception as e:
             ai_api_keys.increment_api_key_stats(_claimed_msg_api_key_id, "failed")
             fail_and_notify(
@@ -521,7 +520,6 @@ def main():
             message_text = parse_message_response(msg_provider["name"], msg_raw_response)
             print(f"  -> OK ({len(message_text)} chars)")
         except Exception as e:
-            ai_api_keys.increment_api_key_stats(_claimed_msg_api_key_id, "failed")
             fail_and_notify(
                 job,
                 f"Message generation: AI response parsing failed — {e}",
@@ -534,8 +532,6 @@ def main():
                 cv_provider=cv_provider,
                 msg_provider=msg_provider,
             )
-
-        ai_api_keys.increment_api_key_stats(_claimed_msg_api_key_id, "success")
 
         print("  ")
         print("[Step 16] Converting HTML to PDF...")
@@ -623,7 +619,13 @@ def main():
 
         print("  ")
         print("[Step 18] Updating job as sent...")
-        jobs.mark_sent(job_id, message_text)
+        jobs.mark_sent(
+            job_id,
+            message_text,
+            email_id=_claimed_email_id,
+            cv_api_key_id=_claimed_cv_api_key_id,
+            msg_api_key_id=_claimed_msg_api_key_id or _claimed_cv_api_key_id,
+        )
         print("  -> OK (status: sent)")
 
         print("  ")
