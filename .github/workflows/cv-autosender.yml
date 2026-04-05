@@ -28,11 +28,15 @@ jobs:
           python -m pip install --upgrade pip
           if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
 
+      # Optional: NOTIFICATION_SMTP_EMAIL + NOTIFICATION_SMTP_PASSWORD send failure alerts
+      # when the workflow fails before a pool email is claimed (same Gmail-style app password pattern).
       - name: Run CV Autosender
         env:
           MONGO_URI: ${{ secrets.MONGO_URI }}
           MONGO_DB_NAME: ${{ secrets.MONGO_DB_NAME }}
           NOTIFICATION_EMAIL: ${{ secrets.NOTIFICATION_EMAIL }}
+          NOTIFICATION_SMTP_EMAIL: ${{ secrets.NOTIFICATION_SMTP_EMAIL }}
+          NOTIFICATION_SMTP_PASSWORD: ${{ secrets.NOTIFICATION_SMTP_PASSWORD }}
           MASK_LOGS: true
           PYTHONUNBUFFERED: "1"
           ACCOUNT_INDEX: ${{ matrix.account_index }}

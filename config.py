@@ -5,6 +5,9 @@ load_dotenv()
 
 # ── Notifications ─────────────────────────────────────────────────────────
 NOTIFICATION_EMAIL = os.getenv("NOTIFICATION_EMAIL")
+# Used when job SMTP is not available yet (e.g. failure before email claim)
+NOTIFICATION_SMTP_EMAIL = os.getenv("NOTIFICATION_SMTP_EMAIL")
+NOTIFICATION_SMTP_PASSWORD = os.getenv("NOTIFICATION_SMTP_PASSWORD")
 
 # ── HTML-to-PDF ───────────────────────────────────────────────────────────
 HTML2PDF_URL = "https://zazo-html2pdf.onrender.com/v1/generate"

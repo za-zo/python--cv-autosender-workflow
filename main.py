@@ -1,5 +1,4 @@
 import base64
-import json
 import signal
 import sys
 import tempfile
@@ -18,7 +17,11 @@ from ai.base import (
 from db import ai_api_keys, companies, emails, jobs, profiles, providers
 from helpers.email_sender import send_email
 from helpers.html_cv import generate_html_cv
-
+from helpers.notification_body import (
+    build_context_html,
+    format_smtp_line,
+    format_updates_html,
+)
 
 
 def mask(val, kind="str"):
@@ -47,72 +50,218 @@ def _html_escape(s):
 
 
 _current_job_id = None
+_claimed_email_id = None
+_claimed_cv_api_key_id = None
+_claimed_msg_api_key_id = None
+
+
+def _reset_claimed_ids():
+    global _claimed_email_id, _claimed_cv_api_key_id, _claimed_msg_api_key_id
+    _claimed_email_id = None
+    _claimed_cv_api_key_id = None
+    _claimed_msg_api_key_id = None
+
+
+def _release_claimed_resources():
+    global _claimed_email_id, _claimed_cv_api_key_id, _claimed_msg_api_key_id
+    if _claimed_msg_api_key_id:
+        try:
+            ai_api_keys.release_api_key_in_use(_claimed_msg_api_key_id)
+        except Exception:
+            pass
+        _claimed_msg_api_key_id = None
+    if _claimed_cv_api_key_id:
+        try:
+            ai_api_keys.release_api_key_in_use(_claimed_cv_api_key_id)
+        except Exception:
+            pass
+        _claimed_cv_api_key_id = None
+    if _claimed_email_id:
+        try:
+            emails.release_email_in_use(_claimed_email_id)
+        except Exception:
+            pass
+        _claimed_email_id = None
+
+
+def _smtp_pair(smtp_email, smtp_password):
+    if smtp_email and smtp_password:
+        return smtp_email, smtp_password
+    ne, np = config.NOTIFICATION_SMTP_EMAIL, config.NOTIFICATION_SMTP_PASSWORD
+    if ne and np:
+        return ne, np
+    return None, None
+
 
 def _handle_exit(signum, frame):
-    """Release claimed job on interrupt/terminate, then exit."""
+    """Release claimed job and pool resources on interrupt/terminate, then exit."""
     if _current_job_id:
         print(f"\n  -> Releasing job {mask(_current_job_id)}...")
         try:
             jobs.release_job(_current_job_id)
         except Exception:
             pass
+    _release_claimed_resources()
     print("  -> Exited.")
     sys.exit(1)
 
 
-def fail_and_notify(job, reason, api_key_to_deactivate=None, email_to_deactivate=None, smtp_email=None, smtp_password=None):
-    """Mark job as failed, optionally deactivate an API key/email config, send error email."""
+def fail_and_notify(
+    job,
+    reason,
+    *,
+    api_key_to_deactivate=None,
+    api_key_deactivate_desc="API key",
+    email_to_deactivate=None,
+    smtp_email=None,
+    smtp_password=None,
+    company=None,
+    cv_provider=None,
+    msg_provider=None,
+    cv_api_key=None,
+    msg_api_key=None,
+    email_config=None,
+    updates_made=None,
+):
+    """Mark job as failed, optionally deactivate API key/email, send error email."""
     job_id = str(job["_id"])
+    updates = list(updates_made) if updates_made else []
 
     if api_key_to_deactivate:
         try:
             ai_api_keys.deactivate_api_key(str(api_key_to_deactivate["_id"]))
+            updates.append(
+                f"{api_key_deactivate_desc} was deactivated (active=false, in_use=false)."
+            )
         except Exception:
             pass
 
     if email_to_deactivate:
         try:
             emails.deactivate_email(str(email_to_deactivate["_id"]))
+            updates.append("Email account was deactivated (active=false, in_use=false).")
         except Exception:
             pass
 
     try:
         jobs.mark_failed(job_id, reason)
+        updates.append("Job was updated: status=failed, active=false, in_use=false.")
     except Exception:
         pass
 
+    pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
     try:
-        api_key_info = ""
-        if api_key_to_deactivate:
-            api_key_json = mask(json.dumps(api_key_to_deactivate, default=str, indent=2), "json")
-            api_key_info = (
-                f"<h3>API Key Info:</h3>"
-                f"<pre>{api_key_json}</pre>"
-            )
-
-        job_json = mask(json.dumps(job, default=str, indent=2), "json")
+        ctx = build_context_html(
+            job,
+            company=company,
+            cv_provider=cv_provider,
+            msg_provider=msg_provider,
+            cv_api_key=cv_api_key,
+            msg_api_key=msg_api_key,
+            email_config=email_config,
+        )
         body = (
             f"<h2>❌ Job Failed</h2>"
             f"<p><strong>Reason:</strong> {_html_escape(reason)}</p>"
-            f"<h3>Job Info:</h3>"
-            f"<pre>{job_json}</pre>"
-            f"{api_key_info}"
+            f"<hr/>"
+            f"{ctx}"
+            f"{format_updates_html(updates)}"
         )
-        if smtp_email and smtp_password:
+        subj = "❌ Job Failed — " + reason.replace("\n", " ").strip()[:200]
+        if pair_e and pair_p and config.NOTIFICATION_EMAIL:
             send_email(
                 config.NOTIFICATION_EMAIL,
-                f"❌ Job Failed — {reason}",
+                subj,
                 body,
-                smtp_email,
-                smtp_password,
+                pair_e,
+                pair_p,
             )
         else:
-            print("  -> [WARN] No SMTP credentials available, skipping failure notification email.")
+            print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
     except Exception:
         pass
 
     print(f"  -> [FAIL] {mask(reason)}")
     exit(1)
+
+
+def _fail_email_claim(job, raw_email_id):
+    if raw_email_id:
+        doc = emails.get_email_by_id(raw_email_id)
+        if not doc:
+            reason = "Email config not found (no document for this ID)"
+        elif not doc.get("active", False):
+            reason = "Email config is INACTIVE (not available for claiming)"
+        elif doc.get("in_use"):
+            reason = "Email config is already IN USE by another worker"
+        else:
+            reason = "Email could not be claimed (unexpected state)"
+        fail_and_notify(job, reason, email_config=doc if doc else None)
+    else:
+        fail_and_notify(
+            job,
+            "No available email in pool (need active=true and not in_use)",
+        )
+
+
+def _fail_cv_key_claim(job, raw_key_id, email_config, smtp_email, smtp_password):
+    if raw_key_id:
+        doc = ai_api_keys.get_api_key_by_id(raw_key_id)
+        if not doc:
+            reason = "CV API key not found (no document for this ID)"
+        elif not doc.get("active", False):
+            reason = "CV API key is INACTIVE (not available for claiming)"
+        elif doc.get("in_use"):
+            reason = "CV API key is already IN USE by another worker"
+        else:
+            reason = "CV API key could not be claimed (unexpected state)"
+        fail_and_notify(
+            job,
+            reason,
+            smtp_email=smtp_email,
+            smtp_password=smtp_password,
+            email_config=email_config,
+            cv_api_key=doc if doc else None,
+        )
+    else:
+        fail_and_notify(
+            job,
+            "No available CV API key in pool (need active=true and not in_use)",
+            smtp_email=smtp_email,
+            smtp_password=smtp_password,
+            email_config=email_config,
+        )
+
+
+def _fail_msg_key_claim(job, raw_key_id, email_config, smtp_email, smtp_password, cv_api_key):
+    if raw_key_id:
+        doc = ai_api_keys.get_api_key_by_id(raw_key_id)
+        if not doc:
+            reason = "Message API key not found (no document for this ID)"
+        elif not doc.get("active", False):
+            reason = "Message API key is INACTIVE (not available for claiming)"
+        elif doc.get("in_use"):
+            reason = "Message API key is already IN USE by another worker"
+        else:
+            reason = "Message API key could not be claimed (unexpected state)"
+        fail_and_notify(
+            job,
+            reason,
+            smtp_email=smtp_email,
+            smtp_password=smtp_password,
+            email_config=email_config,
+            cv_api_key=cv_api_key,
+            msg_api_key=doc if doc else None,
+        )
+    else:
+        fail_and_notify(
+            job,
+            "No available message API key in pool (need active=true and not in_use)",
+            smtp_email=smtp_email,
+            smtp_password=smtp_password,
+            email_config=email_config,
+            cv_api_key=cv_api_key,
+        )
 
 
 def call_ai_with_retries(provider_module, api_key, system_msg, user_msg, model_name=None):
@@ -130,11 +279,10 @@ def call_ai_with_retries(provider_module, api_key, system_msg, user_msg, model_n
 
 
 def main():
-    global _current_job_id
+    global _current_job_id, _claimed_email_id, _claimed_cv_api_key_id, _claimed_msg_api_key_id
     signal.signal(signal.SIGINT, _handle_exit)
     signal.signal(signal.SIGTERM, _handle_exit)
 
-    # ── Step 01: Claim a Job ──────────────────────────────────────────────
     print("[Step 01] Claiming a job...")
     job = jobs.claim_job()
     if not job:
@@ -145,180 +293,252 @@ def main():
     job_target_position = str(job.get("targetPosition", ""))
     job_id = str(job["_id"])
     _current_job_id = job_id
+    _reset_claimed_ids()
     print(f"  -> Claimed: {mask(job_target_position)} | {mask(job_id)}")
 
+    smtp_email = smtp_password = None
+    email_config = None
+    cv_api_key = msg_api_key = None
+    cv_provider = msg_provider = None
+    company = profile = None
+
     try:
-        # ── Step 02: Read Email Config ──────────────────────────────────────
         print("  ")
-        print("[Step 02] Reading email config...")
-        email_id = job.get("emailId")
-        if not email_id:
-            fail_and_notify(job, "Email ID is missing from job")
-        email_config = emails.get_email(email_id)
+        print("[Step 02] Claiming email config...")
+        raw_email_id = job.get("emailId")
+        if raw_email_id:
+            email_config = emails.claim_email_by_id(raw_email_id)
+        else:
+            email_config = emails.claim_random_email()
         if not email_config:
-            fail_and_notify(job, "Email config not found")
-        if not email_config.get("active", False):
-            fail_and_notify(job, "Email config is INACTIVE")
+            _fail_email_claim(job, raw_email_id)
+        _claimed_email_id = str(email_config["_id"])
         smtp_email = email_config["smtp_email"]
         smtp_password = email_config["smtp_password"]
         print(f"  -> Email: {mask(smtp_email, 'email')} | {mask(smtp_password, 'secret')}")
 
-        # ── Step 03: Read CV API Key ──────────────────────────────────────
         print("  ")
-        print("[Step 03] Reading CV API key...")
-        cv_api_key_id = job.get("ai_api_key_id_for_cv_gen")
-        if not cv_api_key_id:
-            fail_and_notify(job, "CV API Key ID is missing from job", smtp_email=smtp_email, smtp_password=smtp_password)
-        cv_api_key = ai_api_keys.get_api_key(cv_api_key_id)
+        print("[Step 03] Claiming CV API key...")
+        raw_cv_id = job.get("ai_api_key_id_for_cv_gen")
+        if raw_cv_id:
+            cv_api_key = ai_api_keys.claim_api_key_by_id(raw_cv_id)
+        else:
+            cv_api_key = ai_api_keys.claim_random_api_key()
         if not cv_api_key:
-            fail_and_notify(job, "CV API Key not found", smtp_email=smtp_email, smtp_password=smtp_password)
-        print(f"  -> Key: {mask(cv_api_key.get('name', ''))} | {mask(cv_api_key.get('apiKey', ''), 'secret')} | usage: {cv_api_key.get('usageCount', 0)}")
+            _fail_cv_key_claim(job, raw_cv_id, email_config, smtp_email, smtp_password)
+        _claimed_cv_api_key_id = str(cv_api_key["_id"])
+        print(
+            f"  -> Key: {mask(cv_api_key.get('name', ''))} | "
+            f"{mask(cv_api_key.get('apiKey', ''), 'secret')} | usage: {cv_api_key.get('usageCount', 0)}"
+        )
 
-        # ── Step 04: Read Message API Key ─────────────────────────────────
         print("  ")
-        print("[Step 04] Reading Message API key...")
-        msg_api_key_id = job.get("ai_api_key_id_for_message_gen")
-        if not msg_api_key_id:
-            fail_and_notify(job, "Message API Key ID is missing from job", smtp_email=smtp_email, smtp_password=smtp_password)
-        msg_api_key = ai_api_keys.get_api_key(msg_api_key_id)
+        print("[Step 04] Claiming message API key...")
+        raw_msg_id = job.get("ai_api_key_id_for_message_gen")
+        same_key_as_cv = raw_msg_id and raw_cv_id and str(raw_msg_id) == str(raw_cv_id)
+        if same_key_as_cv:
+            msg_api_key = cv_api_key
+        elif raw_msg_id:
+            msg_api_key = ai_api_keys.claim_api_key_by_id(raw_msg_id)
+        else:
+            msg_api_key = ai_api_keys.claim_random_api_key()
         if not msg_api_key:
-            fail_and_notify(job, "Message API Key not found", smtp_email=smtp_email, smtp_password=smtp_password)
-        print(f"  -> Key: {mask(msg_api_key.get('name', ''))} | {mask(msg_api_key.get('apiKey', ''), 'secret')} | usage: {msg_api_key.get('usageCount', 0)}")
+            _fail_msg_key_claim(
+                job, raw_msg_id, email_config, smtp_email, smtp_password, cv_api_key
+            )
+        if not same_key_as_cv:
+            _claimed_msg_api_key_id = str(msg_api_key["_id"])
+        print(
+            f"  -> Key: {mask(msg_api_key.get('name', ''))} | "
+            f"{mask(msg_api_key.get('apiKey', ''), 'secret')} | usage: {msg_api_key.get('usageCount', 0)}"
+        )
 
-        # ── Step 05: Check CV API Key is Active ───────────────────────────
         print("  ")
-        print("[Step 05] Checking CV API key is active...")
-        cv_active = cv_api_key.get("active", False)
-        print(f"  -> active: {cv_active}")
-        if not cv_active:
-            fail_and_notify(job, "CV API Key is INACTIVE", smtp_email=smtp_email, smtp_password=smtp_password)
-
-        # ── Step 06: Check Message API Key is Active ──────────────────────
-        print("  ")
-        print("[Step 06] Checking Message API key is active...")
-        msg_active = msg_api_key.get("active", False)
-        print(f"  -> active: {msg_active}")
-        if not msg_active:
-            fail_and_notify(job, "Message API Key is INACTIVE", smtp_email=smtp_email, smtp_password=smtp_password)
-
-        # ── Step 07: Read CV API Key Provider ─────────────────────────────
-        print("  ")
-        print("[Step 07] Reading CV API key provider...")
+        print("[Step 05] Reading CV API key provider...")
         cv_provider = providers.get_provider(cv_api_key["provider"])
         if not cv_provider:
-            fail_and_notify(job, "CV API Key Provider not found", smtp_email=smtp_email, smtp_password=smtp_password)
-        print(f"  -> Provider: {mask(cv_provider.get('name', ''))} | Model Name: {mask(cv_provider.get('model_name', ''))}")
+            fail_and_notify(
+                job,
+                "CV API key provider not found",
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+            )
 
-        # ── Step 08: Read Message API Key Provider ────────────────────────
         print("  ")
-        print("[Step 08] Reading Message API key provider...")
+        print("[Step 06] Reading message API key provider...")
         msg_provider = providers.get_provider(msg_api_key["provider"])
         if not msg_provider:
-            fail_and_notify(job, "Message API Key Provider not found", smtp_email=smtp_email, smtp_password=smtp_password)
-        print(f"  -> Provider: {mask(msg_provider.get('name', ''))} | Model Name: {mask(msg_provider.get('model_name', ''))}")
+            fail_and_notify(
+                job,
+                "Message API key provider not found",
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+            )
 
-        # ── Step 09: Read Profile ─────────────────────────────────────────
         print("  ")
-        print("[Step 09] Reading profile...")
+        print("[Step 07] Reading profile...")
         profile = profiles.get_profile()
         if not profile:
-            fail_and_notify(job, "Profile not found", smtp_email=smtp_email, smtp_password=smtp_password)
+            fail_and_notify(
+                job,
+                "Profile not found",
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
+            )
         print(f"  -> {mask(profile.get('firstName', ''))} {mask(profile.get('lastName', ''))}")
 
-        # ── Step 10: Read Company ─────────────────────────────────────────
         print("  ")
-        print("[Step 10] Reading company...")
+        print("[Step 08] Reading company...")
         company = companies.get_company(job["companyId"])
         if not company:
-            fail_and_notify(job, "Company not found", smtp_email=smtp_email, smtp_password=smtp_password)
+            fail_and_notify(
+                job,
+                "Company not found",
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                company=None,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
+            )
         print(f"  -> {mask(company.get('name', ''))} | {mask(company.get('email', ''), 'email')}")
 
-        # ── Step 11: Build CV Prompt ──────────────────────────────────────
         print("  ")
-        print("[Step 11] Building CV prompt...")
+        print("[Step 09] Building CV prompt...")
         cv_system_msg, cv_user_msg = build_cv_prompt(profile, company, job)
         print(f"  -> OK (prompt: {len(cv_user_msg)} chars)")
 
-        # ── Step 12: Generate CV via AI API ───────────────────────────────
         print("  ")
-        print(f"[Step 12] Generating CV via {mask(cv_provider['name'])}...")
+        print(f"[Step 10] Generating CV via {mask(cv_provider['name'])}...")
         cv_provider_module = get_provider_module(cv_provider["name"])
         try:
             cv_raw_response = call_ai_with_retries(
-                cv_provider_module, cv_api_key["apiKey"], cv_system_msg, cv_user_msg,
+                cv_provider_module,
+                cv_api_key["apiKey"],
+                cv_system_msg,
+                cv_user_msg,
                 model_name=cv_provider.get("model_name"),
             )
             print("  -> OK")
         except Exception as e:
+            ai_api_keys.increment_api_key_stats(_claimed_cv_api_key_id, "failed")
             fail_and_notify(
                 job,
                 f"CV generation AI API error: {cv_provider['name']} returned error — {e}",
                 api_key_to_deactivate=cv_api_key,
-                smtp_email=smtp_email, smtp_password=smtp_password,
+                api_key_deactivate_desc="CV generation API key",
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                company=company,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
             )
 
-        # ── Step 13: Parse CV Response ────────────────────────────────────
         print("  ")
-        print("[Step 13] Parsing CV response...")
+        print("[Step 11] Parsing CV response...")
         try:
             cv_data = parse_cv_response(cv_provider["name"], cv_raw_response)
             skills = cv_data.get("skills", [])
             print(f"  -> OK (skills: {len(skills)}, projects: {len(cv_data.get('projects', []))})")
         except Exception as e:
+            ai_api_keys.increment_api_key_stats(_claimed_cv_api_key_id, "failed")
             fail_and_notify(
                 job,
                 f"CV generation: AI response is not valid JSON — {e}",
-                smtp_email=smtp_email, smtp_password=smtp_password,
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                company=company,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
             )
 
-        # ── Step 14: Generate HTML CV ─────────────────────────────────────
+        ai_api_keys.increment_api_key_stats(_claimed_cv_api_key_id, "success")
+
         print("  ")
-        print("[Step 14] Generating HTML CV...")
+        print("[Step 12] Generating HTML CV...")
         html_content = generate_html_cv(cv_data, profile, job)
         print(f"  -> OK ({len(html_content)} chars)")
 
-        # ── Step 15: Build Message Prompt ─────────────────────────────────
         print("  ")
-        print("[Step 15] Building message prompt...")
+        print("[Step 13] Building message prompt...")
         msg_system_msg, msg_user_msg, msg_lang = build_message_prompt(
             profile, company, job
         )
         print(f"  -> OK (lang: {mask(msg_lang)}, prompt: {len(msg_user_msg)} chars)")
 
-        # ── Step 16: Generate Message via AI API ──────────────────────────
         print("  ")
-        print(f"[Step 16] Generating message via {mask(msg_provider['name'])}...")
+        print(f"[Step 14] Generating message via {mask(msg_provider['name'])}...")
         msg_provider_module = get_provider_module(msg_provider["name"])
         try:
             msg_raw_response = call_ai_with_retries(
-                msg_provider_module, msg_api_key["apiKey"], msg_system_msg, msg_user_msg,
+                msg_provider_module,
+                msg_api_key["apiKey"],
+                msg_system_msg,
+                msg_user_msg,
                 model_name=msg_provider.get("model_name"),
             )
             print("  -> OK")
         except Exception as e:
+            ai_api_keys.increment_api_key_stats(_claimed_msg_api_key_id, "failed")
             fail_and_notify(
                 job,
                 f"Message generation AI API error: {msg_provider['name']} returned error — {e}",
                 api_key_to_deactivate=msg_api_key,
-                smtp_email=smtp_email, smtp_password=smtp_password,
+                api_key_deactivate_desc="Message generation API key",
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                company=company,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
             )
 
-        # ── Step 17: Parse Message Response ───────────────────────────────
         print("  ")
-        print("[Step 17] Parsing message response...")
+        print("[Step 15] Parsing message response...")
         try:
             message_text = parse_message_response(msg_provider["name"], msg_raw_response)
             print(f"  -> OK ({len(message_text)} chars)")
         except Exception as e:
+            ai_api_keys.increment_api_key_stats(_claimed_msg_api_key_id, "failed")
             fail_and_notify(
                 job,
                 f"Message generation: AI response parsing failed — {e}",
-                smtp_email=smtp_email, smtp_password=smtp_password,
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                company=company,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
             )
 
-        # ── Step 18: Convert HTML to PDF ──────────────────────────────────
+        ai_api_keys.increment_api_key_stats(_claimed_msg_api_key_id, "success")
+
         print("  ")
-        print("[Step 18] Converting HTML to PDF...")
+        print("[Step 16] Converting HTML to PDF...")
         pdf_base64 = None
         for attempt in range(1, config.MAX_RETRIES + 1):
             try:
@@ -348,7 +568,18 @@ def main():
                     print(f"  -> Retry {attempt}/{config.MAX_RETRIES} failed, waiting {config.RETRY_WAIT_SECONDS}s...")
                     time.sleep(config.RETRY_WAIT_SECONDS)
                 else:
-                    fail_and_notify(job, f"HTML to PDF conversion failed — {e}", smtp_email=smtp_email, smtp_password=smtp_password)
+                    fail_and_notify(
+                        job,
+                        f"HTML to PDF conversion failed — {e}",
+                        smtp_email=smtp_email,
+                        smtp_password=smtp_password,
+                        company=company,
+                        email_config=email_config,
+                        cv_api_key=cv_api_key,
+                        msg_api_key=msg_api_key,
+                        cv_provider=cv_provider,
+                        msg_provider=msg_provider,
+                    )
 
         pdf_bytes = base64.b64decode(pdf_base64)
         tmp_pdf = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
@@ -357,9 +588,8 @@ def main():
         pdf_path = tmp_pdf.name
         print(f"  -> OK ({len(pdf_bytes)} bytes)")
 
-        # ── Step 19: Send CV Email via SMTP ───────────────────────────────
         print("  ")
-        print(f"[Step 19] Sending CV email to {mask(company.get('email', ''), 'email')}...")
+        print(f"[Step 17] Sending CV email to {mask(company.get('email', ''), 'email')}...")
         subject = (
             f"Candidature — {job.get('targetPosition', '')} | "
             f"{profile.get('firstName', '')} {profile.get('lastName', '')}"
@@ -374,28 +604,50 @@ def main():
                 attachment_path=pdf_path,
             )
             print("  -> OK")
+            emails.increment_email_stats(_claimed_email_id, "success")
         except Exception as e:
-            fail_and_notify(job, f"Failed to send CV email via SMTP — {e}", email_to_deactivate=email_config, smtp_email=smtp_email, smtp_password=smtp_password)
+            emails.increment_email_stats(_claimed_email_id, "failed")
+            fail_and_notify(
+                job,
+                f"Failed to send CV email via SMTP — {e}",
+                email_to_deactivate=email_config,
+                smtp_email=smtp_email,
+                smtp_password=smtp_password,
+                company=company,
+                email_config=email_config,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
+            )
 
-        # ── Step 20: Update Job as Sent ───────────────────────────────────
         print("  ")
-        print("[Step 20] Updating job as sent...")
+        print("[Step 18] Updating job as sent...")
         jobs.mark_sent(job_id, message_text)
         print("  -> OK (status: sent)")
 
-        # ── Step 21: Send Confirmation Email ──────────────────────────────
         print("  ")
-        print("[Step 21] Sending confirmation email...")
+        print("[Step 19] Sending confirmation email...")
         confirm_subject = (
             f"✅ CV envoyé — {job.get('targetPosition', '')} @ {company.get('name', '')}"
+        )
+        ctx = build_context_html(
+            job,
+            company=company,
+            cv_provider=cv_provider,
+            msg_provider=msg_provider,
+            cv_api_key=cv_api_key,
+            msg_api_key=msg_api_key,
+            email_config=email_config,
         )
         confirm_body = (
             f"<h2>✅ CV envoyé avec succès !</h2>"
             f"<p>Votre CV a été envoyé à l'entreprise <strong>{_html_escape(company.get('name', ''))}</strong>.</p>"
-            f"<p>📧 Email : {_html_escape(company.get('email', ''))}</p>"
-            f"<p>💼 Poste visé : {_html_escape(job.get('targetPosition', ''))}</p>"
+            f"{format_smtp_line(smtp_email)}"
             f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
-            f"<hr/><h3>Message envoyé :</h3>"
+            f"<hr/>"
+            f"{ctx}"
+            f"<hr/><h3>Message envoyé</h3>"
             f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
             f"{_html_escape(message_text)}</pre>"
         )
@@ -419,7 +671,21 @@ def main():
         raise
     except Exception as e:
         reason = f"Unexpected error: {e}"
-        fail_and_notify(job, reason)
+        fail_and_notify(
+            job,
+            reason,
+            smtp_email=smtp_email,
+            smtp_password=smtp_password,
+            company=company,
+            email_config=email_config,
+            cv_api_key=cv_api_key,
+            msg_api_key=msg_api_key,
+            cv_provider=cv_provider,
+            msg_provider=msg_provider,
+        )
+    finally:
+        _release_claimed_resources()
+        _current_job_id = None
 
 
 if __name__ == "__main__":
