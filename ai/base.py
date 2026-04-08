@@ -2,16 +2,26 @@ import json
 import re
 
 def build_cv_prompt(profile, company, job):
-    """Build CV generation prompt (port of n8n 'Code - Préparer Prompt CV')."""
+    """Build CV generation prompt - version améliorée."""
+
+    cv_language = job.get("cv_language") or "français"
+
+    # ─── System message ───────────────────────────────────────────────────────
     system_message = (
-        "Tu es un expert en rédaction de CV professionnels.\n"
+        "Tu es un expert en rédaction de CV ATS-optimisés et adaptés aux entreprises cibles.\n"
         "Réponds UNIQUEMENT en JSON valide sans aucun markdown, backticks ou texte supplémentaire.\n"
-        "N'invente AUCUNE information — utilise uniquement les données fournies."
+        "N'invente AUCUNE information — utilise uniquement les données fournies.\n\n"
+        "RAISONNEMENT OBLIGATOIRE : Avant de générer, analyse mentalement :\n"
+        "  1. Quels mots-clés du poste correspondent aux compétences du candidat ?\n"
+        "  2. Quels projets et expériences sont les plus alignés avec l'entreprise cible ?\n"
+        "  3. Quel ton adopter selon la culture de l'entreprise (startup agile vs grande entreprise) ?\n"
+        "Utilise cette analyse pour produire un CV ciblé et pertinent, pas générique.\n"
     )
 
+    # ─── User message ─────────────────────────────────────────────────────────
     user_message = (
-        "Génère le contenu d'un CV optimisé et compatible avec l'entreprise cible.\n"
-        f"La langue du CV est : {job.get('cv_language') or 'français'}\n\n"
+        "Génère le contenu d'un CV optimisé et compatible avec l'entreprise cible.\n\n"
+
         "=== PROFIL DU CANDIDAT ===\n"
         f"Nom complet : {profile.get('firstName', '')} {profile.get('lastName', '')}\n"
         f"Email : {profile.get('email', '')}\n"
@@ -27,6 +37,7 @@ def build_cv_prompt(profile, company, job):
         f"Expériences : {json.dumps(profile.get('experiences', []), default=str)}\n"
         f"Projets : {json.dumps(profile.get('projects', []), default=str)}\n"
         f"Certifications : {json.dumps(profile.get('certifications', []), default=str)}\n\n"
+
         "=== ENTREPRISE CIBLE ===\n"
         f"Nom : {company.get('name', '')}\n"
         f"Email : {company.get('email', '')}\n"
@@ -37,22 +48,29 @@ def build_cv_prompt(profile, company, job):
         f"Description : {company.get('description', '')}\n"
         f"Technologies : {', '.join(company.get('technologies', []))}\n"
         f"Projets entreprise : {json.dumps(company.get('projects', []), default=str)}\n\n"
+
         "=== POSTE VISÉ ===\n"
         f"Titre : {job.get('targetPosition', '')}\n"
         f"Description : {job.get('jobDescription', '')}\n"
         f"Niveau : {job.get('experienceLevel', '')}\n"
         f"Type de contrat : {job.get('contractType', '')}\n"
         f"Notes spéciales : {job.get('notes', '')}\n\n"
+
         "=== RÈGLES STRICTES ===\n"
         "1. Mets en avant les compétences et projets les plus pertinents pour cette entreprise\n"
-        "2. Adapte le résumé à la culture de l'entreprise — détaillé et spécifique (3-5 phrases)\n"
-        "3. N'invente AUCUNE information\n"
-        "4. Si une section est vide, ne l'inclus pas\n"
+        "   → Compare les mots-clés du job description avec les compétences et projets du candidat\n"
+        "2. Le résumé doit : mentionner le poste visé, citer 2-3 compétences clés qui correspondent\n"
+        "   au job description, et montrer une connaissance du secteur de l'entreprise. 3-5 phrases.\n"
+        "3. N'invente AUCUNE information — utilise uniquement ce qui est fourni\n"
+        "4. Si une section est vide, ne l'inclus pas dans le JSON\n"
         "5. Pour chaque projet : TOUTES les technologies + description complète\n"
         "6. Pour chaque expérience : description complète avec réalisations concrètes\n"
         "7. Inclus TOUTES les compétences pertinentes du profil\n"
-        "8. Maximum 8 projets — les plus pertinents pour cette entreprise\n"
-        "9. Réponds UNIQUEMENT en JSON valide\n\n"
+        "8. Maximum 8 projets — sélectionne les plus pertinents pour cette entreprise et ce poste\n"
+        f"9. LANGUE STRICTE : Tout le contenu textuel (summary, descriptions) doit être rédigé\n"
+        f"   en {cv_language}. Les noms de technologies restent en anglais.\n"
+        "10. Réponds UNIQUEMENT en JSON valide — aucun texte avant ou après\n\n"
+
         "FORMAT JSON ATTENDU :\n"
         '{\n'
         '  "summary": "...",\n'
@@ -69,7 +87,9 @@ def build_cv_prompt(profile, company, job):
 
 
 def build_message_prompt(profile, company, job):
-    """Build message generation prompt (port of n8n 'Code - Préparer Prompt Message')."""
+    """Build message generation prompt - version améliorée."""
+
+    # ─── Détection de la langue ───────────────────────────────────────────────
     raw = (job.get("cv_language") or "").lower().strip()
     if raw in ("anglais", "english", "en"):
         lang = "English"
@@ -78,68 +98,82 @@ def build_message_prompt(profile, company, job):
     else:
         lang = "French"
 
-    examples = {
+    # ─── Anti-exemples par langue ─────────────────────────────────────────────
+    anti_examples = {
         "French": (
-            "EXAMPLE (French):\n"
-            "Madame, Monsieur,\n"
-            "Je souhaite postuler au poste de Développeur Full Stack chez TechCorp, reconnue pour son expertise en développement web. Votre utilisation de React.js et Node.js correspond parfaitement à mon profil.\n\n"
-            "Fort de mes compétences en React, Next.js et MongoDB, je suis convaincu de pouvoir contribuer efficacement à vos projets. Mon portfolio : https://monsite.com — GitHub : https://github.com/monprofil.\n\n"
-            "Dans l'attente de votre retour, je reste disponible pour tout entretien.\n"
-            "Jean Dupont"
+            "=== ANTI-EXEMPLES : Ces phrases sont INTERDITES ===\n"
+            "❌ 'Je suis convaincu de pouvoir contribuer efficacement à votre équipe'\n"
+            "❌ 'Votre utilisation de X correspond parfaitement à mon profil'\n"
+            "❌ 'Je suis passionné par le développement web'\n"
+            "❌ 'Dans l'attente de votre retour favorable'\n"
+            "❌ 'Je me permets de vous contacter pour...'\n"
+            "Ces formules sont génériques, évitées par tout bon recruteur. Ne les utilise jamais.\n"
         ),
         "English": (
-            "EXAMPLE (English):\n"
-            "Dear Hiring Manager,\n"
-            "I am excited to apply for the Full Stack Developer position at TechCorp. Your use of React.js and Node.js perfectly matches my skill set.\n\n"
-            "With strong experience in React, Next.js and MongoDB, I am confident I can contribute effectively. Portfolio: https://mysite.com — GitHub: https://github.com/myprofile.\n\n"
-            "I look forward to hearing from you.\n"
-            "John Smith"
+            "=== ANTI-EXAMPLES: These phrases are FORBIDDEN ===\n"
+            "❌ 'I am confident I can contribute effectively to your team'\n"
+            "❌ 'Your use of X perfectly matches my skill set'\n"
+            "❌ 'I am passionate about web development'\n"
+            "❌ 'I look forward to hearing from you'\n"
+            "❌ 'I am excited to apply for this position'\n"
+            "These are generic filler phrases that recruiters ignore. Never use them.\n"
         ),
         "Arabic": (
-            "EXAMPLE (Arabic):\n"
-            "السلام عليكم،\n"
-            "يسعدني التقدم لشغل منصب مطور Full Stack في شركة TechCorp. استخدامكم لـ React.js و Node.js يتوافق تماماً مع مهاراتي.\n\n"
-            "بفضل خبرتي في React و Next.js و MongoDB، أنا واثق من قدرتي على المساهمة في مشاريعكم. موقعي: https://mysite.com — GitHub: https://github.com/myprofile.\n\n"
-            "أتطلع إلى تلقي ردكم وأنا رهن الإشارة لأي مقابلة.\n"
-            "محمد العربي"
+            "=== أمثلة مضادة: هذه العبارات محظورة ===\n"
+            "❌ 'أنا واثق من قدرتي على المساهمة في فريقكم'\n"
+            "❌ 'مهاراتي تتوافق تماماً مع متطلبات الوظيفة'\n"
+            "❌ 'أنا شغوف بتطوير الويب'\n"
+            "❌ 'أتطلع إلى تلقي ردكم'\n"
+            "هذه عبارات عامة يتجاهلها المسؤولون عن التوظيف. لا تستخدمها أبداً.\n"
         ),
     }
 
+    # ─── System message ───────────────────────────────────────────────────────
     system_message = (
-        "You are an expert cover letter writer.\n"
-        f"TARGET LANGUAGE: {lang}\n"
-        "STRICT NEGATIVE CONSTRAINT: DO NOT use JSON. DO NOT use curly braces { } or brackets [ ]. DO NOT use key-value pairs.\n"
-        'NEGATIVE EXAMPLE: Do NOT output text like {"cover_letter": "..."} or {"text": "..."}.\n'
-        'STRICT RULE: If your output begins with a brace "{", it is a failure. Start directly with the text.\n'
+        "You are an elite cover letter writer who specializes in crafting messages that get interviews.\n"
+        f"TARGET LANGUAGE: {lang}\n\n"
+
+        "=== YOUR WRITING PHILOSOPHY ===\n"
+        "- Write like a sharp human professional, never like a template or a robot\n"
+        "- Open with a hook that immediately shows you understand the company's specific world\n"
+        "- Mention at least ONE concrete project or achievement from the candidate's experience\n"
+        "- Position the candidate as a solution to the company's needs, not just a job seeker\n"
+        "- Every sentence must earn its place — cut anything vague or generic\n"
+        "- The tone should feel confident, specific, and human\n\n"
+
+        "=== STRICT FORMAT RULES ===\n"
         f"ABSOLUTE RULE 1: Write EVERY word in {lang}. Zero exceptions.\n"
-        "ABSOLUTE RULE 2: Technology names (React, Node.js, Next.js, MongoDB, etc.) stay in English regardless of target language.\n"
-        f"ABSOLUTE RULE 3: Salutation, body, closing and name are ALL in {lang}.\n"
-        "ABSOLUTE RULE 4: Return ONLY the cover letter text. No JSON, no keys, no wrapper, no markdown. Just the raw letter.\n"
-        "ABSOLUTE RULE 5: Do NOT wrap the letter in quotes. Output raw unquoted text only.\n"
-        f"ABSOLUTE RULE 6: This letter will be sent DIRECTLY as an email body without any modification. Write it email-ready: proper greeting, clean paragraphs, and a professional closing. No placeholders, no notes, no comments, nothing extra — only the final letter text.\n"
-        "ABSOLUTE RULE 7: NEVER use markdown formatting. No **bold**, no *italic*, no _underline_, no # headings, no bullet points with -, no backticks, no markdown syntax of any kind. Use only plain text. This will be displayed as raw text in an email — any markdown will look suspicious and unprofessional."
+        "ABSOLUTE RULE 2: Technology names (React, Node.js, Next.js, MongoDB, etc.) stay in English.\n"
+        "ABSOLUTE RULE 3: Return ONLY the cover letter text. No JSON, no keys, no markdown, no wrapper.\n"
+        "ABSOLUTE RULE 4: Do NOT wrap the letter in quotes. Output raw unquoted plain text only.\n"
+        "ABSOLUTE RULE 5: NEVER use markdown. No **bold**, no *italic*, no bullet points, no headings.\n"
+        "ABSOLUTE RULE 6: This letter is sent directly as email body. Write it email-ready.\n"
+        "ABSOLUTE RULE 7: No placeholders, no subject line, no title, no comments.\n"
+        f"ABSOLUTE RULE 8: If output begins with '{{', it is a failure. Start directly with the salutation.\n"
     )
 
-    example = examples.get(lang, examples["French"])
-
+    # ─── User message ─────────────────────────────────────────────────────────
     user_message = (
-        f"{example}\n\n"
-        f"--- NOW generate a message in {lang.upper()} ONLY using this data ---\n\n"
+        f"{anti_examples.get(lang, anti_examples['French'])}\n"
+
+        f"--- GENERATE a cover letter in {lang.upper()} ONLY using the data below ---\n\n"
+
         "=== CANDIDATE ===\n"
         f"Full Name: {profile.get('firstName', '')} {profile.get('lastName', '')}\n"
         f"Email: {profile.get('email', '')}\n"
         f"Phone: {profile.get('phone', '')}\n"
         f"Location: {profile.get('city', '')}\n"
         f"GitHub: {profile.get('github', '')}\n"
-        f"LinkedIn: {profile.get('linkedin', '')}\n"
         f"Portfolio: {profile.get('portfolio', '')}\n"
+        f"LinkedIn: {profile.get('linkedin', '')}\n"
         f"Summary: {profile.get('summary', '')}\n"
         f"Skills: {', '.join(profile.get('skills', []))}\n"
         f"Languages: {', '.join(profile.get('languages', []))}\n"
         f"Education: {json.dumps(profile.get('education', []), default=str)}\n"
-        f"Experiences: {json.dumps(profile.get('experiences', []), default=str)}\n"
-        f"Projects: {json.dumps(profile.get('projects', []), default=str)}\n"
+        f"Experiences (pick the most relevant to the job): {json.dumps(profile.get('experiences', []), default=str)}\n"
+        f"Projects (mention at least one concrete project): {json.dumps(profile.get('projects', []), default=str)}\n"
         f"Certifications: {json.dumps(profile.get('certifications', []), default=str)}\n\n"
+
         "=== COMPANY ===\n"
         f"Name: {company.get('name', '')}\n"
         f"Email: {company.get('email', '')}\n"
@@ -148,22 +182,26 @@ def build_message_prompt(profile, company, job):
         f"Size: {company.get('size', '')}\n"
         f"Location: {company.get('location', '')}\n"
         f"Description: {company.get('description', '')}\n"
-        f"Technologies: {', '.join(company.get('technologies', []))}\n"
+        f"Technologies they use: {', '.join(company.get('technologies', []))}\n"
         f"Company Projects: {json.dumps(company.get('projects', []), default=str)}\n\n"
+
         "=== JOB ===\n"
         f"Position: {job.get('targetPosition', '')}\n"
-        f"Job Description: {job.get('jobDescription', '')}\n"
+        f"Job Description (extract keywords and match with candidate): {job.get('jobDescription', '')}\n"
         f"Experience Level: {job.get('experienceLevel', '')}\n"
         f"Contract Type: {job.get('contractType', '')}\n"
         f"Special Notes: {job.get('notes', '')}\n\n"
-        "=== RULES ===\n"
+
+        "=== WRITING RULES ===\n"
         f"1. Write entirely in {lang} — salutation, body, closing, name\n"
         "2. Technology names stay in English\n"
-        "3. Mention specific company elements\n"
-        "4. If GitHub or Portfolio links are provided (non-empty), you MUST include them in the body. This is REQUIRED — never omit them when they exist\n"
-        "5. No placeholders, no subject line, no title\n"
-        "6. Maximum 200 words\n"
-        "7. End with a polite closing phrase then the full candidate name"
+        "3. HOOK: Open with something specific about the company or the role — not about yourself\n"
+        "4. ACHIEVEMENT: Reference at least one real project or experience from the candidate's data\n"
+        "5. VALUE: Explain what the candidate brings to THIS company, not just what they want\n"
+        "6. LINKS: If GitHub or Portfolio are provided, include them — this is REQUIRED\n"
+        "7. LENGTH: 220 to 270 words — enough to be specific, short enough to be read fully\n"
+        "8. CLOSING: End with a confident, non-generic closing phrase then the full candidate name\n"
+        "9. NO placeholders, NO subject line, NO title, NO notes outside the letter\n"
     )
 
     return system_message, user_message, lang
