@@ -74,9 +74,17 @@ def build_contact_context_html(
             [
                 _dl_row("_id", msg.get("_id")),
                 _dl_row("contactId", msg.get("contactId")),
+                _dl_row("type", msg.get("type")),
+                _dl_row("notes", msg.get("notes")),
+                _dl_row("language", msg.get("language")),
+                _dl_row("status", msg.get("status")),
+                _dl_row("sentAt", msg.get("sentAt")),
+                _dl_row("gmailMessageId", msg.get("gmailMessageId")),
+                _dl_row("failed_reason", msg.get("failed_reason")),
                 _dl_row("emailId", msg.get("emailId")),
                 _dl_row("ai_api_key_id_for_message_gen", msg.get("ai_api_key_id_for_message_gen")),
                 _dl_row("createdAt", msg.get("createdAt")),
+                _dl_row("updatedAt", msg.get("updatedAt")),
             ]
         )
         parts.append(_section("Contact message", rows))
@@ -84,13 +92,12 @@ def build_contact_context_html(
         rows = "".join(
             [
                 _dl_row("_id", contact.get("_id")),
-                _dl_row("name", contact.get("name") or contact.get("fullName")),
-                _dl_row("company", contact.get("company")),
-                _dl_row("role", contact.get("role") or contact.get("title")),
                 _dl_row("email", contact.get("email")),
-                _dl_row("linkedin", contact.get("linkedin")),
-                _dl_row("website", contact.get("website")),
+                _dl_row("complete_name", contact.get("complete_name")),
+                _dl_row("description", contact.get("description")),
+                _dl_row("companyId", contact.get("companyId")),
                 _dl_row("createdAt", contact.get("createdAt")),
+                _dl_row("updatedAt", contact.get("updatedAt")),
             ]
         )
         parts.append(_section("Contact", rows))
@@ -472,8 +479,11 @@ def main():
         print("[Step 11] Sending confirmation email...")
         try:
             contact_email = contact.get("email", "")
-            contact_name = contact.get("name") or contact.get("fullName") or ""
-            confirm_subject = f"✅ Contact message sent — {contact_name} <{contact_email}>".strip()
+            contact_name = (contact.get("complete_name") or "").strip()
+            if contact_name:
+                confirm_subject = f"✅ Contact message sent — {contact_name} <{contact_email}>".strip()
+            else:
+                confirm_subject = f"✅ Contact message sent — <{contact_email}>".strip()
             ctx = build_contact_context_html(
                 msg,
                 profile=profile,
@@ -484,7 +494,7 @@ def main():
             )
             confirm_body = (
                 f"<h2>✅ Contact message sent successfully!</h2>"
-                f"<p>Recipient: <strong>{_html_escape(contact_name)}</strong> "
+                f"<p>Recipient: <strong>{_html_escape(contact_name) if contact_name else '—'}</strong> "
                 f"&lt;{_html_escape(contact_email)}&gt;</p>"
                 f"{format_smtp_line(smtp_email)}"
                 f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
