@@ -208,8 +208,9 @@ def build_message_prompt(profile, company, job):
 
 
 def build_contact_message_prompt(profile, contact, contact_message):
-    """Build an outreach message prompt for a personal contact (HR, director, etc.)."""
+    """Build an outreach message prompt for a personal contact (HR, director, etc.) - version améliorée."""
 
+    # ─── Détection de la langue ───────────────────────────────────────────────
     raw = (contact_message.get("language") or "").lower().strip()
     if raw in ("anglais", "english", "en"):
         lang = "English"
@@ -222,18 +223,101 @@ def build_contact_message_prompt(profile, contact, contact_message):
     notes = (contact_message.get("notes") or "").strip()
     contact_name = (contact.get("complete_name") or "").strip()
 
-    system_message = (
-        "You are an expert networking outreach writer.\n"
-        f"TARGET LANGUAGE: {lang}\n\n"
-        "=== STRICT RULES ===\n"
-        f"1. Write EVERY word in {lang}. Technology names stay in English.\n"
-        "2. Return ONLY the email body text (no subject line, no markdown, no JSON).\n"
-        "3. Be concise, specific, and human. Avoid generic filler.\n"
-        "4. Mention the attached CV naturally (no file name).\n"
+    # ─── Instructions selon le type de message ────────────────────────────────
+    type_instructions = {
+        "introduction": (
+            "Type: General introduction — open to any opportunity (job, internship, freelance, collaboration). "
+            "Stay open-ended but clear about your profile and availability."
+        ),
+        "internship": (
+            "Type: Internship search — the candidate is looking for an internship (stage). "
+            "Mention it directly and confidently. If duration is known, include it."
+        ),
+        "alternance": (
+            "Type: Alternance search — the candidate is looking for a work-study contract (alternance). "
+            "Mention the alternance format directly. Tone should be motivated and professional."
+        ),
+        "job": (
+            "Type: Job search — the candidate is looking for a full-time position (CDI/CDD). "
+            "Be direct, confident, and value-focused. No hesitation in the tone."
+        ),
+        "freelance": (
+            "Type: Freelance outreach — the candidate offers freelance services. "
+            "Focus on what they can deliver, not what they want."
+        ),
+    }
+    type_instruction = type_instructions.get(
+        msg_type.lower(),
+        f"Type: {msg_type} — adapt the tone accordingly."
     )
 
+    # ─── Anti-exemples par langue ─────────────────────────────────────────────
+    anti_examples = {
+        "French": (
+            "=== PHRASES STRICTEMENT INTERDITES ===\n"
+            "❌ 'Je vous remercie de votre temps et de votre considération'\n"
+            "❌ 'Passionné par la création d'expériences numériques'\n"
+            "❌ 'potentielles synergies'\n"
+            "❌ 'mettre à profit mes compétences'\n"
+            "❌ 'Je suis convaincu que mes compétences pourraient'\n"
+            "❌ 'Je me permets de vous contacter'\n"
+            "❌ 'Dans l'attente de votre retour'\n"
+            "❌ 'Je reste à votre disposition'\n"
+            "Ces formules sont génériques et ignorées par les recruteurs. Remplace-les par des phrases directes et spécifiques.\n"
+        ),
+        "English": (
+            "=== STRICTLY FORBIDDEN PHRASES ===\n"
+            "❌ 'Thank you for your time and consideration'\n"
+            "❌ 'I am passionate about creating digital experiences'\n"
+            "❌ 'potential synergies'\n"
+            "❌ 'leverage my skills'\n"
+            "❌ 'I am confident that my skills could'\n"
+            "❌ 'I hope this message finds you well'\n"
+            "❌ 'I look forward to hearing from you'\n"
+            "❌ 'Please do not hesitate to contact me'\n"
+            "These are generic filler phrases that recruiters ignore. Replace them with direct, specific sentences.\n"
+        ),
+        "Arabic": (
+            "=== العبارات المحظورة تماماً ===\n"
+            "❌ 'شكراً لوقتك واهتمامك'\n"
+            "❌ 'أنا شغوف بإنشاء تجارب رقمية'\n"
+            "❌ 'أنا واثق من أن مهاراتي يمكن أن'\n"
+            "❌ 'أتطلع إلى سماع ردكم'\n"
+            "❌ 'أبقى رهن إشارتكم'\n"
+            "هذه عبارات عامة يتجاهلها المسؤولون عن التوظيف. استبدلها بجمل مباشرة ومحددة.\n"
+        ),
+    }
+
+    # ─── System message ───────────────────────────────────────────────────────
+    system_message = (
+        "You are an expert networking outreach writer who crafts messages that get responses.\n"
+        f"TARGET LANGUAGE: {lang}\n\n"
+
+        "=== YOUR WRITING PHILOSOPHY ===\n"
+        "- Write like a sharp human professional, never like a template\n"
+        "- Be direct and specific — every sentence must serve a purpose\n"
+        "- Sound confident without being arrogant, interested without being desperate\n"
+        "- If the contact has a sector or role context, connect it to ONE specific candidate skill or project\n"
+        "- The closing must be original and action-oriented — never a generic thank-you\n\n"
+
+        f"{anti_examples.get(lang, anti_examples['French'])}\n"
+
+        "=== STRICT FORMAT RULES ===\n"
+        f"1. Write EVERY word in {lang}. Technology names stay in English.\n"
+        "2. Return ONLY the email body text — no subject line, no markdown, no JSON.\n"
+        "3. If contact name exists, greet them by name. Otherwise use a neutral greeting.\n"
+        "4. Mention the attached CV naturally, without naming the file.\n"
+        "5. End with the candidate's full name, phone, and email as signature.\n"
+    )
+
+    # ─── User message ─────────────────────────────────────────────────────────
     user_message = (
-        f"Write a networking email ({msg_type}) to the contact below.\n\n"
+        f"Write a networking outreach email to the contact below.\n\n"
+
+        f"=== MESSAGE INTENT ===\n"
+        f"{type_instruction}\n"
+        f"Extra notes: {notes if notes else 'None'}\n\n"
+
         "=== CANDIDATE ===\n"
         f"Full Name: {profile.get('firstName', '')} {profile.get('lastName', '')}\n"
         f"Email: {profile.get('email', '')}\n"
@@ -244,18 +328,34 @@ def build_contact_message_prompt(profile, contact, contact_message):
         f"LinkedIn: {profile.get('linkedin', '')}\n"
         f"Summary: {profile.get('summary', '')}\n"
         f"Skills: {', '.join(profile.get('skills', []))}\n"
-        f"Projects (mention at least one concrete project if relevant): {json.dumps(profile.get('projects', []), default=str)}\n\n"
+        f"Languages: {', '.join(profile.get('languages', []))}\n"
+        f"Experiences: {json.dumps(profile.get('experiences', []), default=str)}\n"
+        f"Projects (mention at least one concrete project): {json.dumps(profile.get('projects', []), default=str)}\n"
+        f"Certifications: {json.dumps(profile.get('certifications', []), default=str)}\n\n"
+
         "=== CONTACT ===\n"
-        f"Name: {contact_name}\n"
+        f"Name: {contact_name if contact_name else 'Unknown'}\n"
         f"Email: {contact.get('email', '')}\n"
-        f"Description/context: {contact.get('description', '')}\n\n"
-        "=== EXTRA NOTES (optional) ===\n"
-        f"{notes}\n\n"
-        "=== WRITING GUIDELINES ===\n"
-        "- If contact name exists, greet them by name.\n"
-        "- Clearly state who you are and what you’re looking for (job/internship/alternance/entrepreneurship) without sounding desperate.\n"
-        "- Ask for a short call or for the right person to speak to.\n"
-        "- Keep it short: 140–190 words.\n"
+        f"Role/Context: {contact.get('description', '')}\n\n"
+
+        "=== WRITING RULES ===\n"
+        f"1. Write entirely in {lang} — salutation, body, closing, signature\n"
+        "2. Technology names stay in English\n"
+        "3. HOOK: Open with something specific about the contact's company or sector — not about yourself\n"
+        "4. INTRO: One sentence on who you are and your main expertise\n"
+        "5. VALUE: Reference at least one real project or experience that connects to the contact's context\n"
+        "5b. COMPANY: NEVER mention the contact's company name or assume where they currently work.\n"
+        "    They may have changed jobs. Stay open and address the person, not their employer.\n"
+        "    Instead of 'au sein de [entreprise]', use 'dans votre environnement', 'dans votre réseau', 'autour de vous'.\n"
+        "6. ASK: End with a humble, open ask — invite them to respond if they have an opportunity,\n"
+        "   or ask if they can point you to the right person.\n"
+        "   NEVER propose a specific time or date ('next week', 'la semaine prochaine', etc.) — it sounds presumptuous.\n"
+        "   NEVER use: 'Seriez-vous disponible pour un bref échange la semaine prochaine' or any variation.\n"
+        "   Instead use open formulas like: 'Si une opportunité se présente', 'Si vous avez un moment',\n"
+        "   'Si vous connaissez la bonne personne au sein de votre équipe'.\n"
+        "7. CLOSING: Use a confident, original closing phrase — NEVER a generic thank-you sentence\n"
+        "8. LENGTH: 140 to 190 words — concise enough to be read fully\n"
+        "9. SIGNATURE: Full name, phone number, email address\n"
     )
 
     return system_message, user_message, lang
