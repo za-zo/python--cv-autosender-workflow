@@ -149,3 +149,60 @@ def format_smtp_line(smtp_email):
     if not smtp_email:
         return ""
     return f"<p><strong>SMTP sender used:</strong> {_fmt_val(smtp_email)}</p>"
+
+
+def _contact_section(contact):
+    rows = "".join(
+        [
+            _dl_row("_id", contact.get("_id")),
+            _dl_row("email", contact.get("email")),
+            _dl_row("complete_name", contact.get("complete_name")),
+            _dl_row("description", contact.get("description")),
+            _dl_row("companyId", contact.get("companyId")),
+            _dl_row("createdAt", contact.get("createdAt")),
+            _dl_row("updatedAt", contact.get("updatedAt")),
+        ]
+    )
+    return _section("Contact", rows)
+
+
+def _contact_message_section(msg):
+    rows = "".join(
+        [
+            _dl_row("_id", msg.get("_id")),
+            _dl_row("contactId", msg.get("contactId")),
+            _dl_row("type", msg.get("type")),
+            _dl_row("notes", msg.get("notes")),
+            _dl_row("language", msg.get("language")),
+            _dl_row("status", msg.get("status")),
+            _dl_row("sentAt", msg.get("sentAt")),
+            _dl_row("gmailMessageId", msg.get("gmailMessageId")),
+            _dl_row("failed_reason", msg.get("failed_reason")),
+            _dl_row("emailId", msg.get("emailId")),
+            _dl_row("ai_api_key_id_for_message_gen", msg.get("ai_api_key_id_for_message_gen")),
+            _dl_row("createdAt", msg.get("createdAt")),
+            _dl_row("updatedAt", msg.get("updatedAt")),
+        ]
+    )
+    return _section("Contact message", rows)
+
+
+def build_contact_context_html(
+    msg,
+    profile=None,
+    contact=None,
+    email_config=None,
+    msg_provider=None,
+    msg_api_key=None,
+):
+    """Build progressive HTML for contact outreach: only include non-None entities."""
+    parts = [_contact_message_section(msg)]
+    if contact is not None:
+        parts.append(_contact_section(contact))
+    if email_config is not None:
+        parts.append(_email_section(email_config))
+    if msg_provider is not None:
+        parts.append(_provider_section("Message provider", msg_provider))
+    if msg_api_key is not None:
+        parts.append(_api_key_section("AI API key (message generation)", msg_api_key))
+    return "\n".join(parts)

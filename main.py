@@ -188,25 +188,25 @@ def fail_and_notify(
         print(f"  -> [WARN] Failed to mark job as failed: {mask(str(e))}")
 
     pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
-    try:
-        ctx = build_context_html(
-            job,
-            company=company,
-            cv_provider=cv_provider,
-            msg_provider=msg_provider,
-            cv_api_key=cv_api_key,
-            msg_api_key=msg_api_key,
-            email_config=email_config,
-        )
-        body = (
-            f"<h2>❌ Job Failed</h2>"
-            f"<p><strong>Reason:</strong> {_html_escape(reason)}</p>"
-            f"<hr/>"
-            f"{ctx}"
-            f"{format_updates_html(updates)}"
-        )
-        subj = "❌ Job Failed — " + reason.replace("\n", " ").strip()[:200]
-        if pair_e and pair_p and config.NOTIFICATION_EMAIL:
+    if pair_e and pair_p and config.NOTIFICATION_EMAIL:
+        try:
+            ctx = build_context_html(
+                job,
+                company=company,
+                cv_provider=cv_provider,
+                msg_provider=msg_provider,
+                cv_api_key=cv_api_key,
+                msg_api_key=msg_api_key,
+                email_config=email_config,
+            )
+            body = (
+                f"<h2>❌ Job Failed</h2>"
+                f"<p><strong>Reason:</strong> {_html_escape(reason)}</p>"
+                f"<hr/>"
+                f"{ctx}"
+                f"{format_updates_html(updates)}"
+            )
+            subj = "❌ Job Failed — " + reason.replace("\n", " ").strip()[:200]
             send_email(
                 config.NOTIFICATION_EMAIL,
                 subj,
@@ -214,10 +214,25 @@ def fail_and_notify(
                 pair_e,
                 pair_p,
             )
-        else:
-            print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
-    except Exception:
-        pass
+        except Exception as e:
+            print(f"  -> [WARN] Failed to send failure notification via primary SMTP: {mask(str(e))}")
+            # Fallback to global notification SMTP if different
+            ne, np = config.NOTIFICATION_SMTP_EMAIL, config.NOTIFICATION_SMTP_PASSWORD
+            if ne and np and (ne != pair_e or np != pair_p):
+                print(f"  -> Attempting fallback notification via global SMTP {mask(ne, 'email')}...")
+                try:
+                    send_email(
+                        config.NOTIFICATION_EMAIL,
+                        subj,
+                        body,
+                        ne,
+                        np,
+                    )
+                    print("  -> Fallback notification sent.")
+                except Exception as fe:
+                    print(f"  -> [WARN] Fallback notification also failed: {mask(str(fe))}")
+    else:
+        print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
 
     print(f"  -> [FAIL] {mask(reason)}")
     exit(1)
