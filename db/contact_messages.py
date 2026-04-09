@@ -8,7 +8,6 @@ from db.connection import get_db
 
 _POOL_FILTER = {
     "active": True,
-    "status": "pending",
     "$or": [{"in_use": False}, {"in_use": {"$exists": False}}],
 }
 
@@ -34,7 +33,6 @@ def claim_contact_message_by_id(contact_message_id):
         {
             "_id": _oid(contact_message_id),
             "active": True,
-            "status": "pending",
             "$or": [{"in_use": False}, {"in_use": {"$exists": False}}],
         },
         {"$set": {"in_use": True}},
@@ -92,7 +90,7 @@ def mark_failed(contact_message_id, reason):
 def has_active_contact_messages():
     """Check if any pending contact messages remain."""
     db = get_db()
-    return db.contactmessages.count_documents({"active": True, "status": "pending"}) > 0
+    return db.contactmessages.count_documents({"active": True}) > 0
 
 
 def claim_available_contact_message(max_attempts=8):
