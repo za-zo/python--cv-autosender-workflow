@@ -207,6 +207,60 @@ def build_message_prompt(profile, company, job):
     return system_message, user_message, lang
 
 
+def build_contact_message_prompt(profile, contact, contact_message):
+    """Build an outreach message prompt for a personal contact (HR, director, etc.)."""
+
+    raw = (contact_message.get("language") or "").lower().strip()
+    if raw in ("anglais", "english", "en"):
+        lang = "English"
+    elif raw in ("arabe", "arabic", "ar"):
+        lang = "Arabic"
+    else:
+        lang = "French"
+
+    msg_type = (contact_message.get("type") or "introduction").strip()
+    notes = (contact_message.get("notes") or "").strip()
+    contact_name = (contact.get("complete_name") or "").strip()
+
+    system_message = (
+        "You are an expert networking outreach writer.\n"
+        f"TARGET LANGUAGE: {lang}\n\n"
+        "=== STRICT RULES ===\n"
+        f"1. Write EVERY word in {lang}. Technology names stay in English.\n"
+        "2. Return ONLY the email body text (no subject line, no markdown, no JSON).\n"
+        "3. Be concise, specific, and human. Avoid generic filler.\n"
+        "4. Mention the attached CV naturally (no file name).\n"
+    )
+
+    user_message = (
+        f"Write a networking email ({msg_type}) to the contact below.\n\n"
+        "=== CANDIDATE ===\n"
+        f"Full Name: {profile.get('firstName', '')} {profile.get('lastName', '')}\n"
+        f"Email: {profile.get('email', '')}\n"
+        f"Phone: {profile.get('phone', '')}\n"
+        f"Location: {profile.get('city', '')}\n"
+        f"GitHub: {profile.get('github', '')}\n"
+        f"Portfolio: {profile.get('portfolio', '')}\n"
+        f"LinkedIn: {profile.get('linkedin', '')}\n"
+        f"Summary: {profile.get('summary', '')}\n"
+        f"Skills: {', '.join(profile.get('skills', []))}\n"
+        f"Projects (mention at least one concrete project if relevant): {json.dumps(profile.get('projects', []), default=str)}\n\n"
+        "=== CONTACT ===\n"
+        f"Name: {contact_name}\n"
+        f"Email: {contact.get('email', '')}\n"
+        f"Description/context: {contact.get('description', '')}\n\n"
+        "=== EXTRA NOTES (optional) ===\n"
+        f"{notes}\n\n"
+        "=== WRITING GUIDELINES ===\n"
+        "- If contact name exists, greet them by name.\n"
+        "- Clearly state who you are and what you’re looking for (job/internship/alternance/entrepreneurship) without sounding desperate.\n"
+        "- Ask for a short call or for the right person to speak to.\n"
+        "- Keep it short: 140–190 words.\n"
+    )
+
+    return system_message, user_message, lang
+
+
 def _extract_content(provider_name, response_json):
     """Extract the text content from any provider's response JSON."""
     name = provider_name.lower()
