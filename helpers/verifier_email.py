@@ -23,6 +23,56 @@ from email_validator import validate_email, EmailNotValidError
 
 
 # =============================================================================
+# LOGGING
+# =============================================================================
+
+COLORS = {
+    "green"  : "\033[92m",
+    "red"    : "\033[91m",
+    "yellow" : "\033[93m",
+    "cyan"   : "\033[96m",
+    "white"  : "\033[97m",
+    "gray"   : "\033[90m",
+    "bold"   : "\033[1m",
+    "reset"  : "\033[0m",
+}
+
+def c(text: str, color: str) -> str:
+    """Applique une couleur ANSI au texte."""
+    return f"{COLORS.get(color, '')}{text}{COLORS['reset']}"
+
+def log_step(numero: int, nom: str, succes: bool, message: str):
+    """Affiche une ligne de log pour une etape."""
+    icone  = c("✓", "green") if succes else c("✗", "red")
+    etape  = c(f"[Step {numero}]", "cyan")
+    label  = c(f"{nom:<22}", "white")
+    detail = c(message, "green") if succes else c(message, "red")
+    print(f"   {etape} {icone}  {label} {detail}")
+
+def log_skip_step(numero: int, nom: str, message: str):
+    """Affiche une etape ignoree (non executee car inutile)."""
+    etape = c(f"[Step {numero}]", "cyan")
+    label = c(f"{nom:<22}", "gray")
+    msg   = c(f"— {message}", "gray")
+    print(f"   {etape} -  {label} {msg}")
+
+def log_header(email: str):
+    """Affiche l'en-tete pour un email."""
+    print(f"\n{'─' * 65}")
+    print(f"  {c('▶', 'cyan')} {c(email, 'bold')}")
+    print(f"{'─' * 65}")
+
+def log_footer(valide: bool, raison: str):
+    """Affiche le resultat final d'un email."""
+    if valide:
+        resultat = c("✅  VALID   → Generate AI message + Send Gmail", "green")
+    else:
+        resultat = c("❌  SKIPPED → 0 token consumed, 0 Gmail quota used", "red")
+    print(f"\n   {c('Result:', 'bold')} {resultat}")
+    print(f"   {c('Reason:', 'bold')} {c(raison, 'gray')}")
+
+
+# =============================================================================
 # CONFIGURATION
 # =============================================================================
 
@@ -121,6 +171,7 @@ def verifier_disify(email: str) -> dict:
 def verifier_email(email: str) -> dict:
     """
     Verifie si une adresse email est valide et livrable.
+    Affiche le detail de chaque etape dans les logs.
 
     Retourne :
         {
@@ -131,19 +182,42 @@ def verifier_email(email: str) -> dict:
     """
 
     email = email.strip().lower()
+    log_header(email)
+
+    def rejeter(raison: str) -> dict:
+        log_footer(False, raison)
+        return {"valide": False, "existe": False, "raison": raison}
+
+    def accepter(raison: str) -> dict:
+        log_footer(True, raison)
+        return {"valide": True, "existe": True, "raison": raison}
 
     # -- ETAPE 1 : Syntaxe --------------------------------------------------
     try:
         valide = validate_email(email, check_deliverability=False)
         email  = valide.normalized
+        log_step(1, "Syntax", True, f"Valid format → {email}")
     except EmailNotValidError as e:
-        return {"valide": False, "existe": False, "raison": f"syntaxe_invalide: {e}"}
+        log_step(1, "Syntax", False, str(e))
+        log_skip_step(2, "Disposable list", "skipped")
+        log_skip_step(3, "DNS / MX records", "skipped")
+        log_skip_step(4, "Provider check", "skipped")
+        log_skip_step(5, "Disify API", "skipped")
+        log_skip_step(6, "SMTP check", "skipped")
+        return rejeter(f"syntaxe_invalide: {e}")
 
     domaine = email.split("@")[1]
 
     # -- ETAPE 2 : Liste statique GitHub ------------------------------------
     if domaine in DOMAINES_JETABLES:
-        return {"valide": False, "existe": False, "raison": "jetable_liste_statique"}
+        log_step(2, "Disposable list", False, f"{domaine} found in static blocklist (+100k domains)")
+        log_skip_step(3, "DNS / MX records", "skipped — disposable detected early")
+        log_skip_step(4, "Provider check", "skipped")
+        log_skip_step(5, "Disify API", "skipped")
+        log_skip_step(6, "SMTP check", "skipped")
+        return rejeter("jetable_liste_statique")
+
+    log_step(2, "Disposable list", True, f"{domaine} not in static blocklist")
 
     # -- ETAPE 3 : DNS / MX records -----------------------------------------
     try:
@@ -152,38 +226,65 @@ def verifier_email(email: str) -> dict:
             [(r.preference, str(r.exchange).rstrip(".")) for r in mx_records]
         )
         serveur_mx = serveurs[0][1]
+        log_step(3, "DNS / MX records", True, f"MX found → {serveur_mx}")
     except dns.resolver.NXDOMAIN:
-        return {"valide": False, "existe": False, "raison": "domaine_inexistant"}
+        log_step(3, "DNS / MX records", False, f"Domain {domaine} does not exist")
+        log_skip_step(4, "Provider check", "skipped")
+        log_skip_step(5, "Disify API", "skipped")
+        log_skip_step(6, "SMTP check", "skipped")
+        return rejeter("domaine_inexistant")
     except dns.resolver.NoAnswer:
-        return {"valide": False, "existe": False, "raison": "pas_de_mx"}
+        log_step(3, "DNS / MX records", False, f"No MX records found for {domaine}")
+        log_skip_step(4, "Provider check", "skipped")
+        log_skip_step(5, "Disify API", "skipped")
+        log_skip_step(6, "SMTP check", "skipped")
+        return rejeter("pas_de_mx")
     except dns.resolver.Timeout:
-        return {"valide": False, "existe": False, "raison": "timeout_dns"}
+        log_step(3, "DNS / MX records", False, "DNS resolution timed out")
+        log_skip_step(4, "Provider check", "skipped")
+        log_skip_step(5, "Disify API", "skipped")
+        log_skip_step(6, "SMTP check", "skipped")
+        return rejeter("timeout_dns")
     except Exception as e:
-        return {"valide": False, "existe": False, "raison": f"erreur_dns: {e}"}
+        log_step(3, "DNS / MX records", False, str(e))
+        log_skip_step(4, "Provider check", "skipped")
+        log_skip_step(5, "Disify API", "skipped")
+        log_skip_step(6, "SMTP check", "skipped")
+        return rejeter(f"erreur_dns: {e}")
 
     # -- ETAPE 4 : Grands providers -----------------------------------------
-    # Gmail/Outlook/Yahoo bloquent volontairement la verif SMTP.
-    # On verifie quand meme Disify, puis on fait confiance au MX.
     if domaine in GRANDS_PROVIDERS:
+        log_step(4, "Provider check", True, f"{domaine} is a major provider (SMTP unreliable)")
         disify = verifier_disify(email)
+        if disify["erreur"] is None:
+            log_step(5, "Disify API", not disify["est_jetable"],
+                     "Disposable detected" if disify["est_jetable"] else "Not disposable")
+        else:
+            log_skip_step(5, "Disify API", f"unavailable ({disify['erreur']})")
+        log_skip_step(6, "SMTP check", "skipped — major provider blocks SMTP verification")
         if disify["est_jetable"]:
-            return {"valide": False, "existe": False, "raison": "jetable_disify_grand_provider"}
-        return {"valide": True, "existe": True, "raison": "grand_provider_mx_ok"}
+            return rejeter("jetable_disify_grand_provider")
+        return accepter("grand_provider_mx_ok")
+
+    log_skip_step(4, "Provider check", f"{domaine} is not a major provider")
 
     # -- ETAPE 5 : API Disify (domaines jetables dynamiques) ----------------
-    # Capture les domaines absents de la liste statique (ex: dependity.com)
     disify = verifier_disify(email)
 
     if disify["erreur"] is None:
         if disify["est_jetable"]:
-            return {"valide": False, "existe": False, "raison": "jetable_disify"}
+            log_step(5, "Disify API", False, f"{domaine} flagged as disposable")
+            log_skip_step(6, "SMTP check", "skipped — disposable detected")
+            return rejeter("jetable_disify")
         if not disify["domaine_valide"]:
-            return {"valide": False, "existe": False, "raison": "domaine_invalide_disify"}
-    # Si Disify timeout/erreur -> on continue vers SMTP sans bloquer
+            log_step(5, "Disify API", False, f"{domaine} has no valid DNS according to Disify")
+            log_skip_step(6, "SMTP check", "skipped — invalid domain")
+            return rejeter("domaine_invalide_disify")
+        log_step(5, "Disify API", True, "Not disposable, DNS valid")
+    else:
+        log_skip_step(5, "Disify API", f"unavailable ({disify['erreur']}) — continuing to SMTP")
 
     # -- ETAPE 6 : Verification SMTP (RCPT TO) ------------------------------
-    # Contacte le serveur mail directement SANS envoyer d'email.
-    # En cas de timeout/erreur -> on rejette (conservateur) plutot qu'accepter.
     try:
         with smtplib.SMTP(timeout=SMTP_TIMEOUT) as smtp:
             smtp.connect(serveur_mx, 25)
@@ -192,26 +293,26 @@ def verifier_email(email: str) -> dict:
             code, _ = smtp.rcpt(email)
 
             if code == 250:
-                return {"valide": True,  "existe": True,  "raison": "smtp_confirme"}
+                log_step(6, "SMTP check", True, f"Server accepted address (code 250)")
+                return accepter("smtp_confirme")
             elif code in (550, 551, 552, 553, 554):
-                return {"valide": False, "existe": False, "raison": f"smtp_adresse_inexistante_{code}"}
+                log_step(6, "SMTP check", False, f"Server rejected address (code {code})")
+                return rejeter(f"smtp_adresse_inexistante_{code}")
             else:
-                # Code ambigu (greylisting 451, etc.) -> on accepte prudemment
-                return {"valide": True,  "existe": True,  "raison": f"smtp_ambigu_{code}"}
+                log_step(6, "SMTP check", True, f"Ambiguous response (code {code}) — accepted cautiously")
+                return accepter(f"smtp_ambigu_{code}")
 
     except (smtplib.SMTPConnectError, ConnectionRefusedError):
-        # Port 25 bloque (frequent chez les hebergeurs) ->
-        # Disify a deja valide le domaine, on fait confiance
-        return {"valide": True,  "existe": True,  "raison": "smtp_port_bloque_disify_ok"}
+        log_step(6, "SMTP check", True, "Port 25 blocked by host — trusting Disify + MX")
+        return accepter("smtp_port_bloque_disify_ok")
 
     except socket.timeout:
-        # Timeout SMTP = comportement suspect -> on rejette
-        # (fix du bug dependity.com de la version precedente)
-        return {"valide": False, "existe": False, "raison": "smtp_timeout_suspect"}
+        log_step(6, "SMTP check", False, f"Connection timed out after {SMTP_TIMEOUT}s — suspicious")
+        return rejeter("smtp_timeout_suspect")
 
     except Exception as e:
-        # Toute autre erreur SMTP inattendue -> on rejette par securite
-        return {"valide": False, "existe": False, "raison": f"smtp_erreur_suspect: {e}"}
+        log_step(6, "SMTP check", False, f"Unexpected error: {e}")
+        return rejeter(f"smtp_erreur_suspect: {e}")
 
 
 # =============================================================================
@@ -227,13 +328,7 @@ def traiter_email(email: str) -> bool:
     Retourne False -> skip    (economie tokens + quota Gmail)
     """
     resultat = verifier_email(email)
-
-    if resultat["valide"]:
-        print(f"  OK    {email:45s} -> {resultat['raison']}")
-        return True
-    else:
-        print(f"  SKIP  {email:45s} -> {resultat['raison']}")
-        return False
+    return resultat["valide"]
 
 
 # =============================================================================
@@ -243,31 +338,37 @@ def traiter_email(email: str) -> bool:
 if __name__ == "__main__":
 
     emails_test = [
-        # Valides - grands providers
-        "utilisateur@gmail.com",
-        "quelquun@outlook.com",
+        # # Valides - grands providers
+        # "utilisateur@gmail.com",
+        # "quelquun@outlook.com",
 
-        # Valide - domaine professionnel
-        "contact@python.org",
+        # # Valide - domaine professionnel
+        # "contact@python.org",
 
-        # Invalides - syntaxe
-        "pasdarobase.com",
-        "double@@domaine.com",
+        # # Invalides - syntaxe
+        # "pasdarobase.com",
+        # "double@@domaine.com",
 
-        # Invalide - domaine inexistant
-        "test@domainequiexistepas123456.xyz",
+        # # Invalide - domaine inexistant
+        # "test@domainequiexistepas123456.xyz",
 
-        # Invalides - liste statique GitHub
-        "temp@mailinator.com",
-        "jetable@yopmail.com",
+        # # Invalides - liste statique GitHub
+        # "temp@mailinator.com",
+        # "jetable@yopmail.com",
 
-        # Invalide - capture par Disify (absent de la liste statique)
-        "lanetta54@dependity.com",
+        # # Invalide - capture par Disify (absent de la liste statique)
+        # "lanetta54@dependity.com",
+
+        # # Invalide - pas de MX
+        # "hello@takpay.com",
+
+        # "info@heuristik.tech"
+        "lanetta54@dependity.com"
     ]
 
-    print("\n" + "=" * 65)
-    print("  VERIFICATION DES EMAILS")
-    print("=" * 65 + "\n")
+    print(c("\n" + "═" * 65, "cyan"))
+    print(c("  EMAIL VERIFICATION REPORT", "bold"))
+    print(c("═" * 65, "cyan"))
 
     valides = 0
     skips   = 0
@@ -283,9 +384,11 @@ if __name__ == "__main__":
             # <- Rien -> 0 token IA consomme, 0 usage Gmail
 
     total = len(emails_test)
-    print("\n" + "=" * 65)
-    print(f"  Total     : {total} emails")
-    print(f"  Valides   : {valides}  -> generer IA + envoyer")
-    print(f"  Skippes   : {skips}  -> tokens et quota Gmail economises")
-    print(f"  Economie  : {round(skips / total * 100)}%")
-    print("=" * 65 + "\n")
+    print(f"\n{c('═' * 65, 'cyan')}")
+    print(c("  SUMMARY", "bold"))
+    print(c("─" * 65, "cyan"))
+    print(f"  {'Total checked':<25} {c(str(total), 'white')}")
+    print(f"  {'Valid (processed)':<25} {c(str(valides), 'green')}")
+    print(f"  {'Skipped (blocked)':<25} {c(str(skips), 'red')}")
+    print(f"  {'Savings':<25} {c(str(round(skips / total * 100)) + '%', 'yellow')}  <- tokens + Gmail quota saved")
+    print(c("═" * 65, "cyan") + "\n")
