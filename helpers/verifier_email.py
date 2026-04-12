@@ -9,14 +9,11 @@ Ordre de vérification :
     1. Syntaxe
     2. Liste statique GitHub (+100k domaines jetables)
     3. DNS / MX records
-    4. Grands providers (Gmail, Outlook, Yahoo...)
+    4. Provider check (Gmail, Google Workspace, Zoho, Microsoft 365...)
     5. API Disify (gratuite, base dynamique de domaines jetables)
-    6. Vérification SMTP directe (RCPT TO)
 =============================================================================
 """
 
-import socket
-import smtplib
 import requests
 import dns.resolver
 from email_validator import validate_email, EmailNotValidError
@@ -76,7 +73,6 @@ def log_footer(valide: bool, raison: str):
 # CONFIGURATION
 # =============================================================================
 
-SMTP_TIMEOUT = 8   # secondes avant abandon connexion SMTP
 DNS_TIMEOUT  = 5   # secondes avant abandon resolution DNS
 
 # Liste de secours si GitHub est inaccessible au demarrage
@@ -90,7 +86,7 @@ FALLBACK_JETABLE = {
 
 # Grands providers par domaine : SMTP non fiable (ils acceptent tout sans confirmer)
 GRANDS_PROVIDERS = {
-    # "gmail.com", "googlemail.com",
+    "gmail.com", "googlemail.com",
     "outlook.com", "hotmail.com", "live.com", "msn.com",
     "yahoo.com", "yahoo.fr", "yahoo.co.uk",
     "icloud.com", "me.com", "mac.com",
@@ -100,8 +96,8 @@ GRANDS_PROVIDERS = {
 # Serveurs MX hebergeant des domaines tiers (Google Workspace, Microsoft 365...)
 # Ex: heuristik.tech utilise aspmx.l.google.com -> traiter comme Gmail
 MX_PROVIDERS_FIABLES = {
-    # "google.com",              # Google Workspace  -> aspmx.l.google.com
-    # "googlemail.com",          # Google Workspace  -> alt*.aspmx.l.google.com
+    "google.com",              # Google Workspace  -> aspmx.l.google.com
+    "googlemail.com",          # Google Workspace  -> alt*.aspmx.l.google.com
     "outlook.com",             # Microsoft 365     -> *.mail.protection.outlook.com
     "protection.outlook.com",  # Microsoft 365
     "yahoodns.net",            # Yahoo Business
@@ -314,56 +310,21 @@ def verifier_email(email: str) -> dict:
     if disify["erreur"] is None:
         if disify["est_jetable"]:
             log_step(5, "Disify API", False, f"{domaine} flagged as disposable")
-            log_skip_step(6, "SMTP check", "skipped — disposable detected")
             return rejeter("jetable_disify")
         if not disify["domaine_valide"]:
             log_step(5, "Disify API", False, f"{domaine} has no valid DNS according to Disify")
-            log_skip_step(6, "SMTP check", "skipped — invalid domain")
             return rejeter("domaine_invalide_disify")
         log_step(5, "Disify API", True, "Not disposable, DNS valid")
+        return accepter("disify_confirmed_valid")
     else:
-        log_skip_step(5, "Disify API", f"unavailable ({disify['erreur']}) — continuing to SMTP")
+        # Disify indisponible -> on fait confiance au MX (domaine verifie en Step 3)
+        log_skip_step(5, "Disify API", f"unavailable ({disify['erreur']}) — trusting MX")
+        return accepter("mx_ok_disify_unavailable")
 
-    # -- ETAPE 6 : Verification SMTP (RCPT TO) ------------------------------
-    try:
-        with smtplib.SMTP(timeout=SMTP_TIMEOUT) as smtp:
-            smtp.connect(serveur_mx, 25)
-            smtp.ehlo_or_helo_if_needed()
-            smtp.mail("check@verification.local")
-            code, _ = smtp.rcpt(email)
-
-            if code == 250:
-                log_step(6, "SMTP check", True, f"Server accepted address (code 250)")
-                return accepter("smtp_confirme")
-            elif code in (550, 551, 552, 553, 554):
-                log_step(6, "SMTP check", False, f"Server rejected address (code {code})")
-                return rejeter(f"smtp_adresse_inexistante_{code}")
-            else:
-                log_step(6, "SMTP check", True, f"Ambiguous response (code {code}) — accepted cautiously")
-                return accepter(f"smtp_ambigu_{code}")
-
-    except (smtplib.SMTPConnectError, ConnectionRefusedError):
-        log_step(6, "SMTP check", True, "Port 25 blocked by host — trusting Disify + MX")
-        return accepter("smtp_port_bloque_disify_ok")
-
-    except socket.timeout:
-        # Si Disify a valide le domaine -> timeout = serveur restrictif, pas suspect
-        # Si Disify etait indisponible  -> on rejette par precaution
-        if disify["erreur"] is None and not disify["est_jetable"]:
-            log_step(6, "SMTP check", True, f"Timeout after {SMTP_TIMEOUT}s — server restrictive, Disify confirmed valid")
-            return accepter("smtp_timeout_disify_ok")
-        else:
-            log_step(6, "SMTP check", False, f"Timeout after {SMTP_TIMEOUT}s — Disify unavailable, rejecting")
-            return rejeter("smtp_timeout_suspect")
-
-    except Exception as e:
-        # Meme logique : si Disify a valide -> on fait confiance malgre l'erreur SMTP
-        if disify["erreur"] is None and not disify["est_jetable"]:
-            log_step(6, "SMTP check", True, f"SMTP error but Disify confirmed valid — {e}")
-            return accepter("smtp_erreur_disify_ok")
-        else:
-            log_step(6, "SMTP check", False, f"SMTP error, Disify unavailable — {e}")
-            return rejeter(f"smtp_erreur_suspect: {e}")
+    # -- NOTE : Step 6 SMTP (RCPT TO) supprime --
+    # Port 25 bloque par la majorite des hebergeurs cloud (AWS, OVH, etc.)
+    # Resultat : timeout systematique = 0 valeur ajoutee + 8s de delai par email
+    # Remplace par : Disify API (Step 5) + detection MX provider (Step 4)
 
 
 # =============================================================================
@@ -389,33 +350,29 @@ def traiter_email(email: str) -> bool:
 if __name__ == "__main__":
 
     emails_test = [
-        # # Valides - grands providers
-        # "utilisateur@gmail.com",
-        # "quelquun@outlook.com",
+        # Valides - grands providers
+        "utilisateur@gmail.com",
+        "quelquun@outlook.com",
 
-        # # Valide - domaine professionnel
-        # "contact@python.org",
+        # Valide - domaine professionnel
+        "contact@python.org",
 
-        # # Invalides - syntaxe
-        # "pasdarobase.com",
-        # "double@@domaine.com",
+        # Invalides - syntaxe
+        "pasdarobase.com",
+        "double@@domaine.com",
 
-        # # Invalide - domaine inexistant
-        # "test@domainequiexistepas123456.xyz",
+        # Invalide - domaine inexistant
+        "test@domainequiexistepas123456.xyz",
 
-        # # Invalides - liste statique GitHub
-        # "temp@mailinator.com",
-        # "jetable@yopmail.com",
+        # Invalides - liste statique GitHub
+        "temp@mailinator.com",
+        "jetable@yopmail.com",
 
-        # # Invalide - capture par Disify (absent de la liste statique)
-        # "lanetta54@dependity.com",
+        # Invalide - capture par Disify (absent de la liste statique)
+        "lanetta54@dependity.com",
 
-        # # Invalide - pas de MX
-        # "hello@takpay.com",
-
-        # "info@heuristik.tech"
-        # "contact@saastrail.com"
-        "zazoh930@gmail.com"
+        # Invalide - pas de MX
+        "hello@takpay.com",
     ]
 
     print(c("\n" + "═" * 65, "cyan"))
