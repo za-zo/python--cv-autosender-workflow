@@ -22,6 +22,7 @@ Steps :
     2. Static list     — is the domain in the +100k blocklist ?
     3. DNS / MX        — does the domain have a mail server ?
     4. Provider        — is it Gmail / Google Workspace / Zoho / Microsoft 365 ?
+                         ↳ YES → accept immediately, skip Steps 5 & 6
     5. Disify API      — is it a disposable domain ? (free, no key)
     6. Kickbox API     — second opinion on disposable domains (free, no key)
 =============================================================================
@@ -277,7 +278,7 @@ class StepProvider:
                            mail.protection.outlook.com -> Microsoft 365
                            mx.zoho.com -> Zoho Mail
 
-    If detected -> mark as trusted provider, no further checks needed.
+    If detected -> accept immediately, Steps 5 & 6 are skipped entirely.
     If not      -> continue to Steps 5 & 6 for disposable detection.
     """
 
@@ -316,6 +317,8 @@ class StepDisify:
     Calls the Disify API to check if the domain is disposable.
     Free, no signup, no API key required.
     Also checks if the domain has valid DNS according to Disify.
+
+    Only reached when Step 4 does NOT detect a trusted provider.
 
     API docs : https://www.disify.com
     """
@@ -361,6 +364,8 @@ class StepKickbox:
     Useful when Disify misses a domain (e.g. dependity.com).
     Free, no signup, no API key required.
 
+    Only reached when Step 4 does NOT detect a trusted provider.
+
     API docs : https://open.kickbox.com
     """
 
@@ -402,6 +407,10 @@ class EmailVerifier:
     """
     Main class. Runs all 6 verification steps in order.
     Stops as soon as a step fails (early exit = fast).
+
+    Major providers (Gmail, Outlook, Google Workspace, Zoho, M365) are
+    accepted after Step 4 — Steps 5 & 6 are skipped entirely, saving
+    two API round-trips per address.
 
     Usage :
         verifier = EmailVerifier()          # loads blocklist once
@@ -474,28 +483,22 @@ class EmailVerifier:
         mx_server = s3["mx_server"]
 
         # Step 4 — Provider check
+        # ─────────────────────────────────────────────────────────────────
+        # Major provider detected → trusted infrastructure, no API checks
+        # needed. Skip Steps 5 & 6 entirely and accept immediately.
+        # ─────────────────────────────────────────────────────────────────
         s4 = self.step_prov.run(domain, mx_server)
-
         if s4["is_major_provider"]:
-            # Trusted provider detected — run disposable checks then accept
-            s5 = self.step_disify.run(email)
-            if not s5["passed"]:
-                Logger.skip(6, "Kickbox API", "skipped — already rejected by Disify")
-                return self._reject(s5["reason"])
+            self._skip_from(5)
+            return self._accept("major_provider_trusted")
 
-            s6 = self.step_kickbx.run(domain)
-            if not s6["passed"]:
-                return self._reject(s6["reason"])
-
-            return self._accept("major_provider_valid")
-
-        # Step 5 — Disify API
+        # Step 5 — Disify API  (only for unknown providers)
         s5 = self.step_disify.run(email)
         if not s5["passed"]:
             Logger.skip(6, "Kickbox API", "skipped — already rejected by Disify")
             return self._reject(s5["reason"])
 
-        # Step 6 — Kickbox API
+        # Step 6 — Kickbox API  (only for unknown providers)
         s6 = self.step_kickbx.run(domain)
         if not s6["passed"]:
             return self._reject(s6["reason"])
