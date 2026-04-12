@@ -90,7 +90,7 @@ FALLBACK_JETABLE = {
 
 # Grands providers par domaine : SMTP non fiable (ils acceptent tout sans confirmer)
 GRANDS_PROVIDERS = {
-    "gmail.com", "googlemail.com",
+    # "gmail.com", "googlemail.com",
     "outlook.com", "hotmail.com", "live.com", "msn.com",
     "yahoo.com", "yahoo.fr", "yahoo.co.uk",
     "icloud.com", "me.com", "mac.com",
@@ -100,11 +100,14 @@ GRANDS_PROVIDERS = {
 # Serveurs MX hebergeant des domaines tiers (Google Workspace, Microsoft 365...)
 # Ex: heuristik.tech utilise aspmx.l.google.com -> traiter comme Gmail
 MX_PROVIDERS_FIABLES = {
-    "google.com",              # Google Workspace  -> aspmx.l.google.com
-    "googlemail.com",          # Google Workspace  -> alt*.aspmx.l.google.com
+    # "google.com",              # Google Workspace  -> aspmx.l.google.com
+    # "googlemail.com",          # Google Workspace  -> alt*.aspmx.l.google.com
     "outlook.com",             # Microsoft 365     -> *.mail.protection.outlook.com
     "protection.outlook.com",  # Microsoft 365
     "yahoodns.net",            # Yahoo Business
+    "zoho.com",                # Zoho Mail         -> mx.zoho.com
+    "zoho.in",                 # Zoho Mail India   -> mx.zoho.in
+    "zoho.eu",                 # Zoho Mail Europe  -> mx.zoho.eu
     "mimecast.com",            # Mimecast (filtre email entreprise)
     "pphosted.com",            # Proofpoint (filtre email entreprise)
 }
@@ -411,7 +414,8 @@ if __name__ == "__main__":
         # "hello@takpay.com",
 
         # "info@heuristik.tech"
-        "contact@saastrail.com"
+        # "contact@saastrail.com"
+        "zazoh930@gmail.com"
     ]
 
     print(c("\n" + "═" * 65, "cyan"))
