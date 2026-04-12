@@ -344,12 +344,23 @@ def verifier_email(email: str) -> dict:
         return accepter("smtp_port_bloque_disify_ok")
 
     except socket.timeout:
-        log_step(6, "SMTP check", False, f"Connection timed out after {SMTP_TIMEOUT}s — suspicious")
-        return rejeter("smtp_timeout_suspect")
+        # Si Disify a valide le domaine -> timeout = serveur restrictif, pas suspect
+        # Si Disify etait indisponible  -> on rejette par precaution
+        if disify["erreur"] is None and not disify["est_jetable"]:
+            log_step(6, "SMTP check", True, f"Timeout after {SMTP_TIMEOUT}s — server restrictive, Disify confirmed valid")
+            return accepter("smtp_timeout_disify_ok")
+        else:
+            log_step(6, "SMTP check", False, f"Timeout after {SMTP_TIMEOUT}s — Disify unavailable, rejecting")
+            return rejeter("smtp_timeout_suspect")
 
     except Exception as e:
-        log_step(6, "SMTP check", False, f"Unexpected error: {e}")
-        return rejeter(f"smtp_erreur_suspect: {e}")
+        # Meme logique : si Disify a valide -> on fait confiance malgre l'erreur SMTP
+        if disify["erreur"] is None and not disify["est_jetable"]:
+            log_step(6, "SMTP check", True, f"SMTP error but Disify confirmed valid — {e}")
+            return accepter("smtp_erreur_disify_ok")
+        else:
+            log_step(6, "SMTP check", False, f"SMTP error, Disify unavailable — {e}")
+            return rejeter(f"smtp_erreur_suspect: {e}")
 
 
 # =============================================================================
