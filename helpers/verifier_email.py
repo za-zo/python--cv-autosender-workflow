@@ -88,13 +88,25 @@ FALLBACK_JETABLE = {
     "dependity.com", "emailondeck.com", "drrieca.com", "hostelness.com",
 }
 
-# Grands providers : SMTP non fiable (ils acceptent tout sans confirmer)
+# Grands providers par domaine : SMTP non fiable (ils acceptent tout sans confirmer)
 GRANDS_PROVIDERS = {
     "gmail.com", "googlemail.com",
     "outlook.com", "hotmail.com", "live.com", "msn.com",
     "yahoo.com", "yahoo.fr", "yahoo.co.uk",
     "icloud.com", "me.com", "mac.com",
     "aol.com", "protonmail.com", "proton.me",
+}
+
+# Serveurs MX hebergeant des domaines tiers (Google Workspace, Microsoft 365...)
+# Ex: heuristik.tech utilise aspmx.l.google.com -> traiter comme Gmail
+MX_PROVIDERS_FIABLES = {
+    "google.com",              # Google Workspace  -> aspmx.l.google.com
+    "googlemail.com",          # Google Workspace  -> alt*.aspmx.l.google.com
+    "outlook.com",             # Microsoft 365     -> *.mail.protection.outlook.com
+    "protection.outlook.com",  # Microsoft 365
+    "yahoodns.net",            # Yahoo Business
+    "mimecast.com",            # Mimecast (filtre email entreprise)
+    "pphosted.com",            # Proofpoint (filtre email entreprise)
 }
 
 
@@ -226,7 +238,7 @@ def verifier_email(email: str) -> dict:
             [(r.preference, str(r.exchange).rstrip(".")) for r in mx_records]
         )
         serveur_mx = serveurs[0][1]
-        log_step(3, "DNS / MX records", True, f"MX found → {serveur_mx}")
+        log_step(3, "DNS / MX records", True, f"MX found -> {serveur_mx}")
     except dns.resolver.NXDOMAIN:
         log_step(3, "DNS / MX records", False, f"Domain {domaine} does not exist")
         log_skip_step(4, "Provider check", "skipped")
@@ -252,21 +264,46 @@ def verifier_email(email: str) -> dict:
         log_skip_step(6, "SMTP check", "skipped")
         return rejeter(f"erreur_dns: {e}")
 
-    # -- ETAPE 4 : Grands providers -----------------------------------------
-    if domaine in GRANDS_PROVIDERS:
-        log_step(4, "Provider check", True, f"{domaine} is a major provider (SMTP unreliable)")
+    # -- ETAPE 4 : Provider check -------------------------------------------
+    # Detecte les grands providers de 2 facons :
+    #   A) Par le domaine de l'email  : gmail.com, outlook.com...
+    #   B) Par le serveur MX          : aspmx.l.google.com -> Google Workspace
+    #                                   mail.protection.outlook.com -> Microsoft 365
+    # Dans les deux cas, SMTP est non fiable -> on skip et on fait confiance a Disify + MX
+
+    # Extraire le domaine parent du serveur MX (ex: "aspmx.l.google.com" -> "google.com")
+    mx_parts     = serveur_mx.split(".")
+    mx_domaine   = ".".join(mx_parts[-2:]) if len(mx_parts) >= 2 else serveur_mx
+    mx_domaine_3 = ".".join(mx_parts[-3:]) if len(mx_parts) >= 3 else mx_domaine
+
+    est_grand_provider = (
+        domaine    in GRANDS_PROVIDERS or
+        mx_domaine in MX_PROVIDERS_FIABLES or
+        mx_domaine_3 in MX_PROVIDERS_FIABLES
+    )
+
+    if est_grand_provider:
+        # Identifier la raison claire pour le log
+        if domaine in GRANDS_PROVIDERS:
+            provider_label = f"{domaine} is a major provider"
+        else:
+            provider_label = f"hosted on {serveur_mx} (Google Workspace / Microsoft 365)"
+
+        log_step(4, "Provider check", True, f"{provider_label} — SMTP unreliable, skipping")
+
         disify = verifier_disify(email)
         if disify["erreur"] is None:
             log_step(5, "Disify API", not disify["est_jetable"],
                      "Disposable detected" if disify["est_jetable"] else "Not disposable")
         else:
             log_skip_step(5, "Disify API", f"unavailable ({disify['erreur']})")
-        log_skip_step(6, "SMTP check", "skipped — major provider blocks SMTP verification")
+        log_skip_step(6, "SMTP check", "skipped — provider blocks SMTP verification")
+
         if disify["est_jetable"]:
             return rejeter("jetable_disify_grand_provider")
         return accepter("grand_provider_mx_ok")
 
-    log_skip_step(4, "Provider check", f"{domaine} is not a major provider")
+    log_skip_step(4, "Provider check", f"{domaine} is not a major provider (MX: {serveur_mx})")
 
     # -- ETAPE 5 : API Disify (domaines jetables dynamiques) ----------------
     disify = verifier_disify(email)
@@ -338,32 +375,31 @@ def traiter_email(email: str) -> bool:
 if __name__ == "__main__":
 
     emails_test = [
-        # # Valides - grands providers
-        # "utilisateur@gmail.com",
-        # "quelquun@outlook.com",
+        # Valides - grands providers
+        "utilisateur@gmail.com",
+        "quelquun@outlook.com",
 
-        # # Valide - domaine professionnel
-        # "contact@python.org",
+        # Valide - domaine professionnel
+        "contact@python.org",
 
-        # # Invalides - syntaxe
-        # "pasdarobase.com",
-        # "double@@domaine.com",
+        # Invalides - syntaxe
+        "pasdarobase.com",
+        "double@@domaine.com",
 
-        # # Invalide - domaine inexistant
-        # "test@domainequiexistepas123456.xyz",
+        # Invalide - domaine inexistant
+        "test@domainequiexistepas123456.xyz",
 
-        # # Invalides - liste statique GitHub
-        # "temp@mailinator.com",
-        # "jetable@yopmail.com",
+        # Invalides - liste statique GitHub
+        "temp@mailinator.com",
+        "jetable@yopmail.com",
 
-        # # Invalide - capture par Disify (absent de la liste statique)
-        # "lanetta54@dependity.com",
+        # Invalide - capture par Disify (absent de la liste statique)
+        "lanetta54@dependity.com",
 
-        # # Invalide - pas de MX
-        # "hello@takpay.com",
+        # Invalide - pas de MX
+        "hello@takpay.com",
 
-        # "info@heuristik.tech"
-        "lanetta54@dependity.com"
+        "info@heuristik.tech"
     ]
 
     print(c("\n" + "═" * 65, "cyan"))
