@@ -140,39 +140,90 @@ DOMAINES_JETABLES = charger_domaines_jetables()
 
 
 # =============================================================================
-# ETAPE 5 : API DISIFY (gratuite, dynamique, sans cle API)
+# ETAPE 5 : APIs JETABLES (Disify + Kickbox, gratuits, sans cle API)
 # =============================================================================
 
 def verifier_disify(email: str) -> dict:
     """
-    Verifie l'email via l'API Disify :
-        - Base de donnees dynamique de domaines jetables/invalides
-        - 100% gratuite, sans inscription, sans cle API
-        - Couvre les domaines absents des listes statiques (ex: dependity.com)
-
-    Retourne :
-        {
-            "est_jetable"    : bool  -> domaine jetable selon Disify
-            "domaine_valide" : bool  -> domaine avec MX valide selon Disify
-            "erreur"         : str   -> None si OK, message si API inaccessible
-        }
+    API Disify — base dynamique de domaines jetables.
+    Gratuite, sans inscription, sans cle API.
     """
     try:
-        url      = f"https://www.disify.com/api/email/{email}"
-        response = requests.get(url, timeout=6)
+        response = requests.get(
+            f"https://www.disify.com/api/email/{email}",
+            timeout=6
+        )
         response.raise_for_status()
         data = response.json()
-
         return {
             "est_jetable"   : data.get("disposable", False),
             "domaine_valide": data.get("dns", False),
             "erreur"        : None
         }
-
     except requests.exceptions.Timeout:
         return {"est_jetable": False, "domaine_valide": True, "erreur": "disify_timeout"}
     except Exception as e:
         return {"est_jetable": False, "domaine_valide": True, "erreur": f"disify_erreur: {e}"}
+
+
+def verifier_kickbox(domaine: str) -> dict:
+    """
+    API Kickbox — second avis sur les domaines jetables.
+    Gratuite, sans inscription, sans cle API.
+    Utile quand Disify rate un domaine (ex: dependity.com).
+    """
+    try:
+        response = requests.get(
+            f"https://open.kickbox.com/v1/disposable/{domaine}",
+            timeout=6
+        )
+        response.raise_for_status()
+        data = response.json()
+        return {
+            "est_jetable": data.get("disposable", False),
+            "erreur"     : None
+        }
+    except requests.exceptions.Timeout:
+        return {"est_jetable": False, "erreur": "kickbox_timeout"}
+    except Exception as e:
+        return {"est_jetable": False, "erreur": f"kickbox_erreur: {e}"}
+
+
+def verifier_jetable(email: str, domaine: str) -> dict:
+    """
+    Verifie si un domaine est jetable via Disify + Kickbox.
+    Les deux APIs sont interrogees : si l'une dit jetable, c'est jetable.
+
+    Retourne :
+        {
+            "est_jetable"    : bool
+            "domaine_valide" : bool
+            "source"         : str   -> quelle API a detecte / confirme
+            "erreur"         : str   -> None si au moins une API a repondu
+        }
+    """
+    disify  = verifier_disify(email)
+    kickbox = verifier_kickbox(domaine)
+
+    # Si l'une des deux dit jetable -> jetable
+    if disify["est_jetable"]:
+        return {"est_jetable": True,  "domaine_valide": False, "source": "disify",  "erreur": None}
+    if kickbox["est_jetable"]:
+        return {"est_jetable": True,  "domaine_valide": False, "source": "kickbox", "erreur": None}
+
+    # Aucune n'a dit jetable
+    # domaine_valide = True si au moins Disify a repondu correctement
+    domaine_valide = disify["domaine_valide"] if disify["erreur"] is None else True
+    les_deux_erreur = disify["erreur"] is not None and kickbox["erreur"] is not None
+    erreur = f"{disify['erreur']} / {kickbox['erreur']}" if les_deux_erreur else None
+    source = "disify+kickbox" if not les_deux_erreur else "unavailable"
+
+    return {
+        "est_jetable"   : False,
+        "domaine_valide": domaine_valide,
+        "source"        : source,
+        "erreur"        : erreur
+    }
 
 
 # =============================================================================
@@ -207,14 +258,13 @@ def verifier_email(email: str) -> dict:
     try:
         valide = validate_email(email, check_deliverability=False)
         email  = valide.normalized
-        log_step(1, "Syntax", True, f"Valid format → {email}")
+        log_step(1, "Syntax", True, f"Valid format -> {email}")
     except EmailNotValidError as e:
         log_step(1, "Syntax", False, str(e))
         log_skip_step(2, "Disposable list", "skipped")
         log_skip_step(3, "DNS / MX records", "skipped")
         log_skip_step(4, "Provider check", "skipped")
         log_skip_step(5, "Disify API", "skipped")
-        log_skip_step(6, "SMTP check", "skipped")
         return rejeter(f"syntaxe_invalide: {e}")
 
     domaine = email.split("@")[1]
@@ -225,7 +275,6 @@ def verifier_email(email: str) -> dict:
         log_skip_step(3, "DNS / MX records", "skipped — disposable detected early")
         log_skip_step(4, "Provider check", "skipped")
         log_skip_step(5, "Disify API", "skipped")
-        log_skip_step(6, "SMTP check", "skipped")
         return rejeter("jetable_liste_statique")
 
     log_step(2, "Disposable list", True, f"{domaine} not in static blocklist")
@@ -242,25 +291,21 @@ def verifier_email(email: str) -> dict:
         log_step(3, "DNS / MX records", False, f"Domain {domaine} does not exist")
         log_skip_step(4, "Provider check", "skipped")
         log_skip_step(5, "Disify API", "skipped")
-        log_skip_step(6, "SMTP check", "skipped")
         return rejeter("domaine_inexistant")
     except dns.resolver.NoAnswer:
         log_step(3, "DNS / MX records", False, f"No MX records found for {domaine}")
         log_skip_step(4, "Provider check", "skipped")
         log_skip_step(5, "Disify API", "skipped")
-        log_skip_step(6, "SMTP check", "skipped")
         return rejeter("pas_de_mx")
     except dns.resolver.Timeout:
         log_step(3, "DNS / MX records", False, "DNS resolution timed out")
         log_skip_step(4, "Provider check", "skipped")
         log_skip_step(5, "Disify API", "skipped")
-        log_skip_step(6, "SMTP check", "skipped")
         return rejeter("timeout_dns")
     except Exception as e:
         log_step(3, "DNS / MX records", False, str(e))
         log_skip_step(4, "Provider check", "skipped")
         log_skip_step(5, "Disify API", "skipped")
-        log_skip_step(6, "SMTP check", "skipped")
         return rejeter(f"erreur_dns: {e}")
 
     # -- ETAPE 4 : Provider check -------------------------------------------
@@ -268,9 +313,7 @@ def verifier_email(email: str) -> dict:
     #   A) Par le domaine de l'email  : gmail.com, outlook.com...
     #   B) Par le serveur MX          : aspmx.l.google.com -> Google Workspace
     #                                   mail.protection.outlook.com -> Microsoft 365
-    # Dans les deux cas, SMTP est non fiable -> on skip et on fait confiance a Disify + MX
-
-    # Extraire le domaine parent du serveur MX (ex: "aspmx.l.google.com" -> "google.com")
+    #                                   mx.zoho.com -> Zoho Mail
     mx_parts     = serveur_mx.split(".")
     mx_domaine   = ".".join(mx_parts[-2:]) if len(mx_parts) >= 2 else serveur_mx
     mx_domaine_3 = ".".join(mx_parts[-3:]) if len(mx_parts) >= 3 else mx_domaine
@@ -282,49 +325,46 @@ def verifier_email(email: str) -> dict:
     )
 
     if est_grand_provider:
-        # Identifier la raison claire pour le log
         if domaine in GRANDS_PROVIDERS:
             provider_label = f"{domaine} is a major provider"
         else:
-            provider_label = f"hosted on {serveur_mx} (Google Workspace / Microsoft 365)"
+            provider_label = f"hosted on {serveur_mx} (Google Workspace / Zoho / Microsoft 365)"
+        log_step(4, "Provider check", True, f"{provider_label} — trusted infrastructure")
 
-        log_step(4, "Provider check", True, f"{provider_label} — SMTP unreliable, skipping")
-
-        disify = verifier_disify(email)
-        if disify["erreur"] is None:
-            log_step(5, "Disify API", not disify["est_jetable"],
-                     "Disposable detected" if disify["est_jetable"] else "Not disposable")
+        jetable = verifier_jetable(email, domaine)
+        if jetable["erreur"] is None:
+            log_step(5, "Disposable APIs", not jetable["est_jetable"],
+                     f"Disposable detected ({jetable['source']})" if jetable["est_jetable"]
+                     else f"Not disposable ({jetable['source']})")
         else:
-            log_skip_step(5, "Disify API", f"unavailable ({disify['erreur']})")
-        log_skip_step(6, "SMTP check", "skipped — provider blocks SMTP verification")
+            log_skip_step(5, "Disposable APIs", f"unavailable ({jetable['erreur']})")
 
-        if disify["est_jetable"]:
-            return rejeter("jetable_disify_grand_provider")
+        if jetable["est_jetable"]:
+            return rejeter("jetable_grand_provider")
         return accepter("grand_provider_mx_ok")
 
     log_skip_step(4, "Provider check", f"{domaine} is not a major provider (MX: {serveur_mx})")
 
-    # -- ETAPE 5 : API Disify (domaines jetables dynamiques) ----------------
-    disify = verifier_disify(email)
+    # -- ETAPE 5 : APIs jetables (Disify + Kickbox) -------------------------
+    jetable = verifier_jetable(email, domaine)
 
-    if disify["erreur"] is None:
-        if disify["est_jetable"]:
-            log_step(5, "Disify API", False, f"{domaine} flagged as disposable")
-            return rejeter("jetable_disify")
-        if not disify["domaine_valide"]:
-            log_step(5, "Disify API", False, f"{domaine} has no valid DNS according to Disify")
-            return rejeter("domaine_invalide_disify")
-        log_step(5, "Disify API", True, "Not disposable, DNS valid")
-        return accepter("disify_confirmed_valid")
+    if jetable["erreur"] is None:
+        if jetable["est_jetable"]:
+            log_step(5, "Disposable APIs", False,
+                     f"{domaine} flagged as disposable ({jetable['source']})")
+            return rejeter("jetable_detecte")
+        if not jetable["domaine_valide"]:
+            log_step(5, "Disposable APIs", False,
+                     f"{domaine} has no valid DNS according to APIs")
+            return rejeter("domaine_invalide")
+        log_step(5, "Disposable APIs", True,
+                 f"Not disposable, DNS valid ({jetable['source']})")
+        return accepter("apis_confirmed_valid")
     else:
-        # Disify indisponible -> on fait confiance au MX (domaine verifie en Step 3)
-        log_skip_step(5, "Disify API", f"unavailable ({disify['erreur']}) — trusting MX")
-        return accepter("mx_ok_disify_unavailable")
+        log_skip_step(5, "Disposable APIs", f"unavailable — trusting MX")
+        return accepter("mx_ok_apis_unavailable")
 
-    # -- NOTE : Step 6 SMTP (RCPT TO) supprime --
-    # Port 25 bloque par la majorite des hebergeurs cloud (AWS, OVH, etc.)
-    # Resultat : timeout systematique = 0 valeur ajoutee + 8s de delai par email
-    # Remplace par : Disify API (Step 5) + detection MX provider (Step 4)
+
 
 
 # =============================================================================
