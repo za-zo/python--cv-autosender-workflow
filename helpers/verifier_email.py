@@ -386,31 +386,32 @@ def traiter_email(email: str) -> bool:
 if __name__ == "__main__":
 
     emails_test = [
-        # Valides - grands providers
-        "utilisateur@gmail.com",
-        "quelquun@outlook.com",
+        # # Valides - grands providers
+        # "utilisateur@gmail.com",
+        # "quelquun@outlook.com",
 
-        # Valide - domaine professionnel
-        "contact@python.org",
+        # # Valide - domaine professionnel
+        # "contact@python.org",
 
-        # Invalides - syntaxe
-        "pasdarobase.com",
-        "double@@domaine.com",
+        # # Invalides - syntaxe
+        # "pasdarobase.com",
+        # "double@@domaine.com",
 
-        # Invalide - domaine inexistant
-        "test@domainequiexistepas123456.xyz",
+        # # Invalide - domaine inexistant
+        # "test@domainequiexistepas123456.xyz",
 
-        # Invalides - liste statique GitHub
-        "temp@mailinator.com",
-        "jetable@yopmail.com",
+        # # Invalides - liste statique GitHub
+        # "temp@mailinator.com",
+        # "jetable@yopmail.com",
 
-        # Invalide - capture par Disify (absent de la liste statique)
-        "lanetta54@dependity.com",
+        # # Invalide - capture par Disify (absent de la liste statique)
+        # "lanetta54@dependity.com",
 
-        # Invalide - pas de MX
-        "hello@takpay.com",
+        # # Invalide - pas de MX
+        # "hello@takpay.com",
 
-        "info@heuristik.tech"
+        # "info@heuristik.tech"
+        "contact@saastrail.com"
     ]
 
     print(c("\n" + "═" * 65, "cyan"))
