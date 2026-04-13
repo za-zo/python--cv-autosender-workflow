@@ -6,6 +6,7 @@ import config
 from ai import get_provider_module
 from ai.base import build_contact_message_prompt, parse_message_response
 from db import ai_api_keys, contacts, contact_messages, emails, profiles, providers
+from email_verifier import EmailVerifier
 from helpers.email_sender import send_email
 from helpers.notification_body import (
     build_contact_context_html,
@@ -312,6 +313,43 @@ def main():
                 msg,
                 f"Contact not found for contactId={msg.get('contactId')}",
                 **_notify_kw(profile=profile, contact=None),
+            )
+
+        contact_email = contact.get("email", "")
+        print("  ")
+        print("[Step 03b] Verifying contact email...")
+        try:
+            verifier = EmailVerifier()
+            result = verifier.verify(contact_email)
+            if not result["valid"]:
+                reason = f"Contact email verification failed: {result['reason']}"
+                fail_and_notify(
+                    msg,
+                    reason,
+                    **_notify_kw(
+                        smtp_email=smtp_email,
+                        smtp_password=smtp_password,
+                        profile=profile,
+                        contact=contact,
+                        email_config=email_config,
+                        msg_api_key=msg_api_key,
+                    ),
+                )
+            print(f"  -> Contact email verified: {mask(contact_email, 'email')}")
+        except SystemExit:
+            raise
+        except Exception as e:
+            fail_and_notify(
+                msg,
+                f"[Step 03b] Contact email verification — {e}",
+                **_notify_kw(
+                    smtp_email=smtp_email,
+                    smtp_password=smtp_password,
+                    profile=profile,
+                    contact=contact,
+                    email_config=email_config,
+                    msg_api_key=msg_api_key,
+                ),
             )
 
         print("  ")

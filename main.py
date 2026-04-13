@@ -15,6 +15,7 @@ from ai.base import (
     parse_message_response,
 )
 from db import ai_api_keys, companies, emails, jobs, profiles, providers
+from email_verifier import EmailVerifier
 from helpers.email_sender import send_email
 from helpers.html_cv import generate_html_cv
 from helpers.notification_body import (
@@ -434,6 +435,47 @@ def main():
                     msg_api_key=msg_api_key,
                     cv_provider=cv_provider,
                     msg_provider=msg_provider,
+                ),
+            )
+
+        company_email = company.get("email", "")
+        print("  ")
+        print("[Step 02b] Verifying company email...")
+        try:
+            verifier = EmailVerifier()
+            result = verifier.verify(company_email)
+            if not result["valid"]:
+                reason = f"Company email verification failed: {result['reason']}"
+                fail_and_notify(
+                    job,
+                    reason,
+                    **_notify_kw(
+                        smtp_email=smtp_email,
+                        smtp_password=smtp_password,
+                        email_config=email_config,
+                        cv_api_key=cv_api_key,
+                        msg_api_key=msg_api_key,
+                        cv_provider=cv_provider,
+                        msg_provider=msg_provider,
+                        company=company,
+                    ),
+                )
+            print(f"  -> Company email verified: {mask(company_email, 'email')}")
+        except SystemExit:
+            raise
+        except Exception as e:
+            fail_and_notify(
+                job,
+                f"[Step 02b] Company email verification — {e}",
+                **_notify_kw(
+                    smtp_email=smtp_email,
+                    smtp_password=smtp_password,
+                    email_config=email_config,
+                    cv_api_key=cv_api_key,
+                    msg_api_key=msg_api_key,
+                    cv_provider=cv_provider,
+                    msg_provider=msg_provider,
+                    company=company,
                 ),
             )
 
