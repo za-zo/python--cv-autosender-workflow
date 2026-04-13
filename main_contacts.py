@@ -5,12 +5,12 @@ import time
 import config
 from ai import get_provider_module
 from ai.base import build_contact_message_prompt, parse_message_response
-from db import ai_api_keys, contacts, contact_messages, emails, profiles, providers
+from db import ai_api_keys, contacts, contact_messages, emails, profiles, providers, email_providers
 from email_verifier import EmailVerifier
-from helpers.email_sender import send_email
+from helpers.email_sender import send_email, send_email_via_api
 from helpers.notification_body import (
     build_contact_context_html,
-    format_smtp_line,
+    format_sender_line,
     format_updates_html,
 )
 
@@ -64,6 +64,7 @@ def _notify_kw(
     msg_provider=None,
     profile=None,
     contact=None,
+    email_provider=None,
 ):
     """Keyword args for fail_and_notify from current workflow state."""
     return {
@@ -74,7 +75,32 @@ def _notify_kw(
         "msg_provider": msg_provider,
         "profile": profile,
         "contact": contact,
+        "email_provider": email_provider,
     }
+
+
+def workflow_send_email(to, subject, body, email_config, email_provider=None, attachment_path=None):
+    """Helper to send email using either SMTP or API based on config."""
+    email_address = email_config.get("emailAddress")
+    config_type = email_config.get("configType", "smtp")
+    if config_type == "api":
+        provider_name = email_provider.get("name", "Unknown") if email_provider else "Unknown"
+        api_key = email_config.get("apiKey")
+        return send_email_via_api(provider_name, to, subject, body, api_key, email_address, attachment_path)
+    else:
+        # SMTP
+        smtp_user = email_config.get("smtpUser")
+        smtp_pass = email_config.get("smtpPassword")
+        # Use server/port from config if present, otherwise from provider, otherwise default
+        smtp_server = email_config.get("smtpServer")
+        if not smtp_server and email_provider:
+            smtp_server = email_provider.get("smtpServer")
+        
+        smtp_port = email_config.get("smtpPort")
+        if not smtp_port and email_provider:
+            smtp_port = email_provider.get("smtpPort")
+            
+        return send_email(to, subject, body, email_address, smtp_user, smtp_pass, smtp_server, smtp_port, attachment_path)
 
 
 def fail_and_notify(
@@ -89,6 +115,7 @@ def fail_and_notify(
     profile=None,
     contact=None,
     email_config=None,
+    email_provider=None,
     msg_provider=None,
     msg_api_key=None,
     updates_made=None,
@@ -131,14 +158,14 @@ def fail_and_notify(
     elif not config.NOTIFICATION_EMAIL:
         print("  -> [WARN] NOTIFICATION_EMAIL is not set, skipping failure notification email.")
     else:
-        pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
-        if pair_e and pair_p:
+        if email_config:
             try:
                 ctx = build_contact_context_html(
                     msg,
                     profile=profile,
                     contact=contact,
                     email_config=email_config,
+                    email_provider=email_provider,
                     msg_provider=msg_provider,
                     msg_api_key=msg_api_key,
                 )
@@ -151,17 +178,17 @@ def fail_and_notify(
                     f"{format_updates_html(updates)}"
                 )
                 subj = "❌ Contact message failed — " + reason.replace("\n", " ").strip()[:200]
-                send_email(
+                workflow_send_email(
                     config.NOTIFICATION_EMAIL,
                     subj,
                     body,
-                    pair_e,
-                    pair_p,
+                    email_config,
+                    email_provider,
                 )
             except Exception as e:
-                print(f"  -> [WARN] Failed to send failure notification via primary SMTP: {mask(str(e))}")
+                print(f"  -> [WARN] Failed to send failure notification via main email account: {mask(str(e))}")
                 ne, np = config.NOTIFICATION_SMTP_EMAIL, config.NOTIFICATION_SMTP_PASSWORD
-                if ne and np and (ne != pair_e or np != pair_p):
+                if ne and np:
                     print(f"  -> Attempting fallback notification via global SMTP {mask(ne, 'email')}...")
                     try:
                         send_email(
@@ -169,13 +196,24 @@ def fail_and_notify(
                             subj,
                             body,
                             ne,
+                            ne,
                             np,
                         )
                         print("  -> Fallback notification sent.")
                     except Exception as fe:
                         print(f"  -> [WARN] Fallback notification also failed: {mask(str(fe))}")
         else:
-            print("  -> [WARN] No SMTP credentials, skipping failure notification email.")
+            # No email_config available, try global notification SMTP
+            ne, np = config.NOTIFICATION_SMTP_EMAIL, config.NOTIFICATION_SMTP_PASSWORD
+            if ne and np:
+                try:
+                    subj = "❌ Contact message failed (no email config) — " + reason.replace("\n", " ").strip()[:200]
+                    body = f"<h2>❌ Contact message failed</h2><p><strong>Reason:</strong> {_html_escape(reason)}</p>{format_updates_html(updates)}"
+                    send_email(config.NOTIFICATION_EMAIL, subj, body, ne, ne, np)
+                except Exception as e:
+                    print(f"  -> [WARN] Failed to send failure notification via global SMTP: {mask(str(e))}")
+            else:
+                print("  -> [WARN] No SMTP credentials, skipping failure notification email.")
 
     print(f"  -> [FAIL] {mask(reason)}")
     sys.exit(1)
@@ -266,6 +304,7 @@ def main():
 
     smtp_email = smtp_password = None
     email_config = None
+    email_provider = None
     msg_api_key = None
     msg_provider = None
     profile = None
@@ -373,15 +412,39 @@ def main():
                     **_notify_kw(profile=profile, contact=contact),
                 )
             _claimed_email_id = str(email_config["_id"])
-            smtp_email = email_config["smtp_email"]
-            smtp_password = email_config["smtp_password"]
-            print(f"  -> Email claimed: {mask(smtp_email, 'email')} | ID: {mask(_claimed_email_id)}")
+            
+            # Extract fields for logging and notification fallback
+            smtp_email = email_config.get("emailAddress") or email_config.get("smtp_email")
+            smtp_password = email_config.get("smtpPassword") or email_config.get("smtp_password")
+            
+            print(f"  -> Email claimed: {mask(smtp_email, 'email')} | ID: {mask(_claimed_email_id)} | Type: {email_config.get('configType')}")
         except SystemExit:
             raise
         except Exception as e:
             fail_and_notify(
                 msg,
                 f"[Step 04] Claiming email config — {e}",
+                **_notify_kw(profile=profile, contact=contact, email_config=email_config),
+            )
+
+        print("  ")
+        print("[Step 04b] Reading email provider...")
+        try:
+            provider_id = email_config.get("providerId")
+            if provider_id:
+                email_provider = email_providers.get_email_provider(provider_id)
+                if email_provider:
+                    print(f"  -> Email Provider: {mask(email_provider.get('name', ''))}")
+                else:
+                    print(f"  -> [WARN] Email Provider not found for ID: {mask(provider_id)}")
+            else:
+                print("  -> [WARN] No providerId in email config")
+        except SystemExit:
+            raise
+        except Exception as e:
+            fail_and_notify(
+                msg,
+                f"[Step 04b] Reading email provider — {e}",
                 **_notify_kw(profile=profile, contact=contact, email_config=email_config),
             )
 
@@ -405,6 +468,7 @@ def main():
                         profile=profile,
                         contact=contact,
                         email_config=email_config,
+                        email_provider=email_provider,
                     ),
                 )
             _claimed_msg_api_key_id = str(msg_api_key["_id"])
@@ -470,6 +534,7 @@ def main():
             msg_provider=msg_provider,
             profile=profile,
             contact=contact,
+            email_provider=email_provider,
         )
 
         print("  ")
@@ -528,15 +593,16 @@ def main():
         subject = f"{profile.get('firstName', '')} {profile.get('lastName', '')} — Introduction"
         attachment = _cv_attachment_path(lang)
         try:
-            send_email(
+            print(f"  -> Sending via {email_config.get('configType', 'smtp')}...")
+            workflow_send_email(
                 contact["email"],
                 subject,
                 f"<pre>{_html_escape(message_text)}</pre>",
-                smtp_email,
-                smtp_password,
+                email_config,
+                email_provider,
                 attachment_path=attachment,
             )
-            print(f"  -> Email sent successfully to {mask(contact['email'], 'email')}")
+            print(f"  -> Email sent successfully via {email_config.get('configType', 'smtp')} to {mask(contact['email'], 'email')}")
         except Exception as e:
             try:
                 emails.increment_email_stats(_claimed_email_id, "failed")
@@ -587,6 +653,7 @@ def main():
                     profile=profile,
                     contact=contact,
                     email_config=email_config,
+                    email_provider=email_provider,
                     msg_provider=msg_provider,
                     msg_api_key=msg_api_key,
                 )
@@ -594,7 +661,7 @@ def main():
                     f"<h2>✅ Contact message sent successfully!</h2>"
                     f"<p>Recipient: <strong>{_html_escape(contact_name) if contact_name else '—'}</strong> "
                     f"&lt;{_html_escape(contact_email)}&gt;</p>"
-                    f"{format_smtp_line(smtp_email)}"
+                    f"{format_sender_line(smtp_email, email_provider)}"
                     f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
                     f"<hr/>"
                     f"{ctx}"
@@ -603,19 +670,16 @@ def main():
                     f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
                     f"{_html_escape(message_text)}</pre>"
                 )
-                pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
-                if pair_e and pair_p:
-                    send_email(
-                        config.NOTIFICATION_EMAIL,
-                        confirm_subject,
-                        confirm_body,
-                        pair_e,
-                        pair_p,
-                        attachment_path=attachment,
-                    )
-                    print(f"  -> Confirmation sent successfully (to: {mask(config.NOTIFICATION_EMAIL, 'email')})")
-                else:
-                    print("  -> [WARN] No SMTP credentials for confirmation email.")
+                print(f"  -> Sending confirmation to: {mask(config.NOTIFICATION_EMAIL, 'email')}...")
+                workflow_send_email(
+                    config.NOTIFICATION_EMAIL,
+                    confirm_subject,
+                    confirm_body,
+                    email_config,
+                    email_provider,
+                    attachment_path=attachment,
+                )
+                print(f"  -> Confirmation sent successfully (to: {mask(config.NOTIFICATION_EMAIL, 'email')})")
             except Exception as e:
                 print(f"  -> [WARN] [Step 11] Confirmation email failed (message already sent): {mask(str(e))}")
 

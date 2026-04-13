@@ -95,18 +95,24 @@ def _api_key_section(title, doc):
     return _section(title, rows)
 
 
-def _email_section(email_config):
-    rows = "".join(
-        [
-            _dl_row("_id", email_config.get("_id")),
-            _dl_row("smtp_email", email_config.get("smtp_email")),
-            _dl_row("usage_count", email_config.get("usage_count")),
-            _dl_row("successUsageCount", email_config.get("successUsageCount")),
-            _dl_row("failedUsageCount", email_config.get("failedUsageCount")),
-            _dl_row("createdAt", email_config.get("createdAt")),
-        ]
-    )
-    return _section("Email (SMTP account)", rows)
+def _email_section(email_config, email_provider=None):
+    rows = [
+        _dl_row("_id", email_config.get("_id")),
+        _dl_row("emailAddress", email_config.get("emailAddress") or email_config.get("smtp_email")),
+        _dl_row("configType", email_config.get("configType")),
+    ]
+    if email_provider:
+        rows.append(_dl_row("provider", email_provider.get("name")))
+    
+    rows.extend([
+        _dl_row("usageCount", email_config.get("usageCount")),
+        _dl_row("successUsageCount", email_config.get("successUsageCount")),
+        _dl_row("failedUsageCount", email_config.get("failedUsageCount")),
+        _dl_row("createdAt", email_config.get("createdAt")),
+    ])
+    
+    rows_html = "".join(rows)
+    return _section("Email account", rows_html)
 
 
 def build_context_html(
@@ -117,13 +123,14 @@ def build_context_html(
     cv_api_key=None,
     msg_api_key=None,
     email_config=None,
+    email_provider=None,
 ):
     """Build progressive HTML: only include sections for non-None entities."""
     parts = [_job_section(job)]
     if company is not None:
         parts.append(_company_section(company))
     if email_config is not None:
-        parts.append(_email_section(email_config))
+        parts.append(_email_section(email_config, email_provider))
     if cv_provider is not None:
         parts.append(_provider_section("CV provider", cv_provider))
     if msg_provider is not None:
@@ -145,10 +152,11 @@ def format_updates_html(updates_made):
     )
 
 
-def format_smtp_line(smtp_email):
-    if not smtp_email:
+def format_sender_line(email_address, email_provider=None):
+    if not email_address:
         return ""
-    return f"<p><strong>SMTP sender used:</strong> {_fmt_val(smtp_email)}</p>"
+    provider_info = f" ({email_provider.get('name')})" if email_provider else ""
+    return f"<p><strong>Sender used:</strong> {_fmt_val(email_address)}{html_escape(provider_info)}</p>"
 
 
 def _contact_section(contact):
@@ -192,6 +200,7 @@ def build_contact_context_html(
     profile=None,
     contact=None,
     email_config=None,
+    email_provider=None,
     msg_provider=None,
     msg_api_key=None,
 ):
@@ -200,7 +209,7 @@ def build_contact_context_html(
     if contact is not None:
         parts.append(_contact_section(contact))
     if email_config is not None:
-        parts.append(_email_section(email_config))
+        parts.append(_email_section(email_config, email_provider))
     if msg_provider is not None:
         parts.append(_provider_section("Message provider", msg_provider))
     if msg_api_key is not None:
