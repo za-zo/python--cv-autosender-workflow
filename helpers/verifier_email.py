@@ -1,6 +1,6 @@
 """
 =============================================================================
-EMAIL VERIFIER
+EMAIL VERIFIER  —  REINFORCED EDITION
 =============================================================================
 Checks an email address through 6 steps before generating an AI message
 or sending via Gmail — saving tokens and Gmail quota.
@@ -19,15 +19,27 @@ Usage :
 
 Steps :
     1. Syntax          — is the format valid ?
-    2. Static list     — is the domain in the +100k blocklist ?
+    2. Static list     — domain checked against 3 merged GitHub blocklists :
+                           • disposable-email-domains/disposable-email-domains  (~120k domains)
+                           • disposable/disposable-email-domains                 (~60k  domains)
+                           • ivolo/disposable-email-domains                      (~40k  domains)
+                         Each source is fetched concurrently at startup and
+                         merged into a single de-duplicated set.
     3. DNS / MX        — does the domain have a mail server ?
     4. Provider        — is it Gmail / Google Workspace / Zoho / Microsoft 365 ?
                          ↳ YES → accept immediately, skip Steps 5 & 6
-    5. Disify API      — is it a disposable domain ? (free, no key)
-    6. Kickbox API     — second opinion on disposable domains (free, no key)
+    5. API checks      — 4 free keyless APIs called concurrently :
+                           • Disify      https://www.disify.com
+                           • Kickbox     https://open.kickbox.com
+                           • DeBounce    https://disposable.debounce.io
+                           • ValidatorPizza / UserCheck  https://www.validator.pizza
+                         Any single "disposable" verdict → reject.
+                         Skipped sources (timeout / unavailable) are ignored.
+    6. Final verdict   — if all API checks pass → accept
 =============================================================================
 """
 
+import concurrent.futures
 import requests
 import dns.resolver
 from email_validator import validate_email, EmailNotValidError
@@ -65,16 +77,16 @@ class Logger:
     def step(number: int, name: str, passed: bool, message: str):
         icon   = Logger.color("✓", "green") if passed else Logger.color("✗", "red")
         label  = Logger.color(f"[Step {number}]", "cyan")
-        name   = Logger.color(f"{name:<22}", "white")
+        name_s = Logger.color(f"{name:<26}", "white")
         detail = Logger.color(message, "green") if passed else Logger.color(message, "red")
-        print(f"   {label} {icon}  {name} {detail}")
+        print(f"   {label} {icon}  {name_s} {detail}")
 
     @staticmethod
     def skip(number: int, name: str, reason: str):
         label  = Logger.color(f"[Step {number}]", "cyan")
-        name   = Logger.color(f"{name:<22}", "gray")
+        name_s = Logger.color(f"{name:<26}", "gray")
         reason = Logger.color(f"— {reason}", "gray")
-        print(f"   {label} -  {name} {reason}")
+        print(f"   {label} -  {name_s} {reason}")
 
     @staticmethod
     def footer(valid: bool, reason: str):
@@ -106,8 +118,53 @@ class Config:
 
     DNS_TIMEOUT = 5   # seconds before DNS resolution is aborted
     API_TIMEOUT = 6   # seconds before an API call is aborted
+    LIST_TIMEOUT = 10 # seconds to fetch each blocklist from GitHub
 
-    # Fallback list if GitHub is unreachable at startup
+    # ── Three GitHub blocklist sources, fetched concurrently at startup ───
+    #
+    #   SOURCE A  disposable-email-domains/disposable-email-domains
+    #             Community-maintained since 2014, screenshot-verified additions.
+    #             ~120 000 domains. One domain per line, plain text.
+    #
+    #   SOURCE B  disposable/disposable-email-domains
+    #             Auto-generated daily from ~20 scraped providers.
+    #             ~60 000 domains. Use domains.txt (not strict) for full coverage.
+    #
+    #   SOURCE C  ivolo/disposable-email-domains
+    #             Raw JSON array — the list that powers the Kickbox API itself.
+    #             ~40 000 domains. Good catch for domains Kickbox already knows.
+    #
+    BLOCKLIST_SOURCES = [
+        {
+            "name": "disposable-email-domains (community)",
+            "url" : (
+                "https://raw.githubusercontent.com/"
+                "disposable-email-domains/disposable-email-domains/"
+                "master/disposable_email_blocklist.conf"
+            ),
+            "format": "txt",   # one domain per line
+        },
+        {
+            "name": "disposable/disposable-email-domains (daily auto)",
+            "url" : (
+                "https://raw.githubusercontent.com/"
+                "disposable/disposable-email-domains/"
+                "master/domains.txt"
+            ),
+            "format": "txt",
+        },
+        {
+            "name": "ivolo/disposable-email-domains (Kickbox source)",
+            "url" : (
+                "https://raw.githubusercontent.com/"
+                "ivolo/disposable-email-domains/"
+                "master/index.json"
+            ),
+            "format": "json",  # JSON array of strings
+        },
+    ]
+
+    # Fallback used only when ALL three GitHub sources are unreachable
     FALLBACK_BLOCKLIST = {
         "mailinator.com", "guerrillamail.com", "temp-mail.org", "yopmail.com",
         "trashmail.com", "fakeinbox.com", "10minutemail.com", "maildrop.cc",
@@ -116,7 +173,7 @@ class Config:
         "dependity.com", "emailondeck.com", "drrieca.com", "hostelness.com",
     }
 
-    # Domains where SMTP verification is unreliable (they accept all then filter)
+    # Domains where SMTP verification is unreliable (they accept-all then filter)
     MAJOR_PROVIDERS = {
         "gmail.com", "googlemail.com",
         "outlook.com", "hotmail.com", "live.com", "msn.com",
@@ -125,8 +182,7 @@ class Config:
         "aol.com", "protonmail.com", "proton.me",
     }
 
-    # MX server domains that indicate trusted hosting infrastructure
-    # (companies using Google Workspace, Zoho, Microsoft 365, etc.)
+    # MX server base-domains that indicate trusted hosting infrastructure
     TRUSTED_MX_PROVIDERS = {
         "google.com",              # Google Workspace  -> aspmx.l.google.com
         "googlemail.com",          # Google Workspace  -> alt*.aspmx.l.google.com
@@ -134,45 +190,81 @@ class Config:
         "protection.outlook.com",  # Microsoft 365
         "yahoodns.net",            # Yahoo Business
         "zoho.com",                # Zoho Mail         -> mx.zoho.com
-        "zoho.in",                 # Zoho Mail India   -> mx.zoho.in
-        "zoho.eu",                 # Zoho Mail Europe  -> mx.zoho.eu
-        "mimecast.com",            # Mimecast (enterprise email filter)
-        "pphosted.com",            # Proofpoint (enterprise email filter)
+        "zoho.in",                 # Zoho Mail India
+        "zoho.eu",                 # Zoho Mail Europe
+        "mimecast.com",            # Mimecast (enterprise filter)
+        "pphosted.com",            # Proofpoint (enterprise filter)
     }
 
 
 # =============================================================================
-# STATIC BLOCKLIST — loaded once at startup from GitHub
+# STATIC BLOCKLIST — three GitHub sources merged at startup
 # =============================================================================
 
 class StaticBlocklist:
     """
-    Downloads and holds the +100k disposable domain blocklist from GitHub.
-    Loaded once when EmailVerifier is instantiated.
-    """
+    Downloads and merges three independent GitHub blocklists concurrently.
 
-    GITHUB_URL = (
-        "https://raw.githubusercontent.com/"
-        "disposable-email-domains/disposable-email-domains/"
-        "master/disposable_email_blocklist.conf"
-    )
+    Sources are fetched in parallel with ThreadPoolExecutor so startup time
+    equals the slowest single request, not the sum of all three.
+
+    The resulting set is de-duplicated automatically by Python's set union.
+    If a source is unavailable its contribution is silently skipped; the
+    fallback hard-coded set is only used when ALL sources fail.
+    """
 
     def __init__(self):
         self.domains = self._load()
 
-    def _load(self) -> set:
+    # ── private helpers ────────────────────────────────────────────────────
+
+    @staticmethod
+    def _fetch_source(source: dict) -> set:
+        """Fetch and parse a single blocklist source. Returns a set of domains."""
         try:
-            response = requests.get(self.GITHUB_URL, timeout=10)
+            response = requests.get(source["url"], timeout=Config.LIST_TIMEOUT)
             response.raise_for_status()
-            domains = set(response.text.strip().splitlines())
-            print(f"[INIT] {len(domains)} disposable domains loaded from GitHub")
+
+            if source["format"] == "json":
+                import json
+                raw = json.loads(response.text)
+                domains = {d.strip().lower() for d in raw if isinstance(d, str) and d.strip()}
+            else:
+                domains = {
+                    line.strip().lower()
+                    for line in response.text.splitlines()
+                    if line.strip() and not line.startswith("#")
+                }
+
+            print(f"[INIT] ✓ {len(domains):>7} domains  ← {source['name']}")
             return domains
+
         except Exception as e:
-            print(f"[INIT] GitHub unreachable ({e}) -> using fallback list")
-            return Config.FALLBACK_BLOCKLIST
+            print(f"[INIT] ✗ Skipped (error: {e})  ← {source['name']}")
+            return set()
+
+    def _load(self) -> set:
+        print("[INIT] Loading blocklists concurrently from 3 GitHub sources …")
+        merged: set = set()
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=3) as pool:
+            futures = {
+                pool.submit(self._fetch_source, src): src
+                for src in Config.BLOCKLIST_SOURCES
+            }
+            for future in concurrent.futures.as_completed(futures):
+                merged |= future.result()
+
+        if merged:
+            print(f"[INIT] ✅ {len(merged):>7} unique disposable domains loaded (3 sources merged)")
+            return merged
+
+        # All three sources failed — use the embedded fallback
+        print(f"[INIT] ⚠️  All GitHub sources unreachable → using built-in fallback list")
+        return Config.FALLBACK_BLOCKLIST
 
     def contains(self, domain: str) -> bool:
-        return domain in self.domains
+        return domain.lower() in self.domains
 
 
 # =============================================================================
@@ -190,9 +282,9 @@ class StepSyntax:
 
     def run(self, email: str) -> dict:
         try:
-            result = validate_email(email, check_deliverability=False)
+            result     = validate_email(email, check_deliverability=False)
             normalized = result.normalized
-            Logger.step(self.STEP, self.NAME, True, f"Valid format -> {normalized}")
+            Logger.step(self.STEP, self.NAME, True, f"Valid format → {normalized}")
             return {"passed": True, "email": normalized}
         except EmailNotValidError as e:
             Logger.step(self.STEP, self.NAME, False, str(e))
@@ -200,27 +292,29 @@ class StepSyntax:
 
 
 # =============================================================================
-# STEP 2 — STATIC BLOCKLIST
+# STEP 2 — STATIC BLOCKLIST  (3 sources merged)
 # =============================================================================
 
 class StepStaticBlocklist:
     """
-    Checks if the domain is in the +100k static blocklist loaded from GitHub.
-    This is the fastest disposable domain check — no network call needed.
+    Checks the domain against the merged 3-source static blocklist.
+    This is the fastest disposable check — pure in-memory set lookup, O(1).
     """
 
     STEP = 2
-    NAME = "Static blocklist"
+    NAME = "Static blocklist (×3)"
 
     def __init__(self, blocklist: StaticBlocklist):
         self.blocklist = blocklist
 
     def run(self, domain: str) -> dict:
         if self.blocklist.contains(domain):
-            Logger.step(self.STEP, self.NAME, False, f"{domain} found in blocklist (+100k domains)")
+            Logger.step(self.STEP, self.NAME, False,
+                        f"{domain} found in merged blocklist")
             return {"passed": False, "reason": "disposable_static_list"}
 
-        Logger.step(self.STEP, self.NAME, True, f"{domain} not in static blocklist")
+        Logger.step(self.STEP, self.NAME, True,
+                    f"{domain} not in merged blocklist ({len(self.blocklist.domains):,} entries)")
         return {"passed": True}
 
 
@@ -243,7 +337,7 @@ class StepDNS:
             mx_records = dns.resolver.resolve(domain, "MX", lifetime=Config.DNS_TIMEOUT)
             servers    = sorted([(r.preference, str(r.exchange).rstrip(".")) for r in mx_records])
             mx_server  = servers[0][1]
-            Logger.step(self.STEP, self.NAME, True, f"MX found -> {mx_server}")
+            Logger.step(self.STEP, self.NAME, True, f"MX found → {mx_server}")
             return {"passed": True, "mx_server": mx_server}
 
         except dns.resolver.NXDOMAIN:
@@ -274,12 +368,12 @@ class StepProvider:
 
     Detection uses two methods :
         A) Domain name   : gmail.com, outlook.com ...
-        B) MX server     : aspmx.l.google.com -> Google Workspace
-                           mail.protection.outlook.com -> Microsoft 365
-                           mx.zoho.com -> Zoho Mail
+        B) MX server     : aspmx.l.google.com       → Google Workspace
+                           mail.protection.outlook.com → Microsoft 365
+                           mx.zoho.com               → Zoho Mail
 
-    If detected -> accept immediately, Steps 5 & 6 are skipped entirely.
-    If not      -> continue to Steps 5 & 6 for disposable detection.
+    If detected → accept immediately, Step 5 is skipped entirely.
+    If not      → continue to Step 5 for the API disposable checks.
     """
 
     STEP = 4
@@ -300,120 +394,207 @@ class StepProvider:
             if domain in Config.MAJOR_PROVIDERS:
                 label = f"{domain} is a major provider"
             else:
-                label = f"hosted on {mx_server} (Google Workspace / Zoho / Microsoft 365)"
+                label = f"hosted on {mx_server} (Google WS / Zoho / M365)"
             Logger.step(self.STEP, self.NAME, True, f"{label} — trusted infrastructure")
             return {"passed": True, "is_major_provider": True}
 
-        Logger.skip(self.STEP, self.NAME, f"{domain} is not a major provider (MX: {mx_server})")
+        Logger.skip(self.STEP, self.NAME,
+                    f"{domain} is not a major provider (MX: {mx_server})")
         return {"passed": True, "is_major_provider": False}
 
 
 # =============================================================================
-# STEP 5 — DISIFY API
+# STEP 5 — FOUR FREE KEYLESS APIS  (run concurrently)
 # =============================================================================
 
-class StepDisify:
+# ── Individual API callers ─────────────────────────────────────────────────
+
+def _call_disify(email: str) -> dict:
     """
-    Calls the Disify API to check if the domain is disposable.
-    Free, no signup, no API key required.
-    Also checks if the domain has valid DNS according to Disify.
+    Disify API — free, no key required.
+    https://www.disify.com/api/email/{email}
+    Returns {"disposable": bool, "dns": bool, ...}
+    """
+    try:
+        r = requests.get(
+            f"https://www.disify.com/api/email/{email}",
+            timeout=Config.API_TIMEOUT
+        )
+        r.raise_for_status()
+        data = r.json()
+        return {
+            "api"        : "Disify",
+            "disposable" : bool(data.get("disposable", False)),
+            "available"  : True,
+        }
+    except Exception as e:
+        return {"api": "Disify", "available": False, "error": str(e)}
 
-    Only reached when Step 4 does NOT detect a trusted provider.
 
-    API docs : https://www.disify.com
+def _call_kickbox(domain: str) -> dict:
+    """
+    Kickbox Open API — free, no key required.
+    https://open.kickbox.com/v1/disposable/{domain}
+    Returns {"disposable": bool}
+    """
+    try:
+        r = requests.get(
+            f"https://open.kickbox.com/v1/disposable/{domain}",
+            timeout=Config.API_TIMEOUT
+        )
+        r.raise_for_status()
+        data = r.json()
+        return {
+            "api"        : "Kickbox",
+            "disposable" : bool(data.get("disposable", False)),
+            "available"  : True,
+        }
+    except Exception as e:
+        return {"api": "Kickbox", "available": False, "error": str(e)}
+
+
+def _call_debounce(email: str) -> dict:
+    """
+    DeBounce Free Disposable API — free, no key required, CORS enabled.
+    https://disposable.debounce.io/?email={email}
+    Returns {"disposable": "true"|"false"}
+
+    DeBounce maintains their own continuously-updated domain list —
+    a different dataset from Disify and Kickbox, which improves coverage.
+    """
+    try:
+        r = requests.get(
+            f"https://disposable.debounce.io/?email={email}",
+            timeout=Config.API_TIMEOUT
+        )
+        r.raise_for_status()
+        data = r.json()
+        # API returns the string "true" or "false", not a bool
+        raw          = data.get("disposable", "false")
+        is_disposable = str(raw).lower() == "true"
+        return {
+            "api"        : "DeBounce",
+            "disposable" : is_disposable,
+            "available"  : True,
+        }
+    except Exception as e:
+        return {"api": "DeBounce", "available": False, "error": str(e)}
+
+
+def _call_validator_pizza(domain: str) -> dict:
+    """
+    Validator.pizza (now rebranded as UserCheck) — free, no key required.
+    https://www.validator.pizza/domain/{domain}
+    Returns {"status": int, "mx": bool, "disposable": bool, ...}
+
+    Rate-limited to 120 requests/hour on the free tier.
+    Checks a different internal list; good at catching alias / relay domains.
+    On rate-limit (HTTP 429) or any error the result is treated as "unknown"
+    and the check is skipped rather than blocking the address.
+    """
+    try:
+        r = requests.get(
+            f"https://www.validator.pizza/domain/{domain}",
+            timeout=Config.API_TIMEOUT
+        )
+        if r.status_code == 429:
+            return {"api": "ValidatorPizza", "available": False,
+                    "error": "rate limit reached (120 req/h)"}
+        r.raise_for_status()
+        data = r.json()
+        return {
+            "api"        : "ValidatorPizza",
+            "disposable" : bool(data.get("disposable", False)),
+            "available"  : True,
+        }
+    except Exception as e:
+        return {"api": "ValidatorPizza", "available": False, "error": str(e)}
+
+
+# ── Step orchestrator ─────────────────────────────────────────────────────
+
+class StepApiChecks:
+    """
+    Runs all four free keyless APIs concurrently using ThreadPoolExecutor.
+
+    Total wait time = max(individual timeouts) instead of their sum.
+    A single "disposable: True" from ANY available API triggers rejection.
+    Unavailable / timed-out APIs are logged as skipped and do not block.
+
+    APIs used (all free, no registration, no API key):
+        • Disify          https://www.disify.com
+        • Kickbox         https://open.kickbox.com
+        • DeBounce        https://disposable.debounce.io
+        • ValidatorPizza  https://www.validator.pizza
     """
 
     STEP = 5
-    NAME = "Disify API"
+    NAME = "API checks (×4, async)"
 
-    def run(self, email: str) -> dict:
-        try:
-            response = requests.get(
-                f"https://www.disify.com/api/email/{email}",
-                timeout=Config.API_TIMEOUT
-            )
-            response.raise_for_status()
-            data = response.json()
+    def run(self, email: str, domain: str) -> dict:
+        # Launch all four API calls in parallel
+        with concurrent.futures.ThreadPoolExecutor(max_workers=4) as pool:
+            futures = {
+                pool.submit(_call_disify,          email ): "Disify",
+                pool.submit(_call_kickbox,          domain): "Kickbox",
+                pool.submit(_call_debounce,         email ): "DeBounce",
+                pool.submit(_call_validator_pizza,  domain): "ValidatorPizza",
+            }
+            results = [f.result() for f in concurrent.futures.as_completed(futures)]
 
-            is_disposable = data.get("disposable", False)
-            dns_valid     = data.get("dns", False)
+        # Evaluate results — any positive disposable verdict rejects the address
+        reject_reason = None
+        lines         = []
 
-            if is_disposable:
-                Logger.step(self.STEP, self.NAME, False, "Flagged as disposable")
-                return {"passed": False, "reason": "disposable_disify"}
+        for res in sorted(results, key=lambda r: r["api"]):
+            api = res["api"]
+            if not res["available"]:
+                err = res.get("error", "unavailable")
+                lines.append(f"  {Logger.color('─', 'gray')} {Logger.color(api, 'gray'):<18} skipped ({err})")
+            elif res["disposable"]:
+                lines.append(f"  {Logger.color('✗', 'red')} {Logger.color(api, 'red'):<18} flagged as disposable")
+                if reject_reason is None:
+                    reject_reason = f"disposable_{api.lower()}"
+            else:
+                lines.append(f"  {Logger.color('✓', 'green')} {Logger.color(api, 'green'):<18} not disposable")
 
-            Logger.step(self.STEP, self.NAME, True, f"Not disposable (dns_valid={dns_valid})")
-            return {"passed": True, "dns_valid": dns_valid}
+        if reject_reason:
+            Logger.step(self.STEP, self.NAME, False, "at least one API flagged disposable")
+            print("\n".join(lines))
+            return {"passed": False, "reason": reject_reason}
 
-        except requests.exceptions.Timeout:
-            Logger.skip(self.STEP, self.NAME, "API timeout — continuing to Step 6")
-            return {"passed": True, "skipped": True}
-
-        except Exception as e:
-            Logger.skip(self.STEP, self.NAME, f"API unavailable ({e}) — continuing to Step 6")
-            return {"passed": True, "skipped": True}
-
-
-# =============================================================================
-# STEP 6 — KICKBOX API
-# =============================================================================
-
-class StepKickbox:
-    """
-    Calls the Kickbox API as a second opinion on disposable domains.
-    Useful when Disify misses a domain (e.g. dependity.com).
-    Free, no signup, no API key required.
-
-    Only reached when Step 4 does NOT detect a trusted provider.
-
-    API docs : https://open.kickbox.com
-    """
-
-    STEP = 6
-    NAME = "Kickbox API"
-
-    def run(self, domain: str) -> dict:
-        try:
-            response = requests.get(
-                f"https://open.kickbox.com/v1/disposable/{domain}",
-                timeout=Config.API_TIMEOUT
-            )
-            response.raise_for_status()
-            data = response.json()
-
-            is_disposable = data.get("disposable", False)
-
-            if is_disposable:
-                Logger.step(self.STEP, self.NAME, False, "Flagged as disposable")
-                return {"passed": False, "reason": "disposable_kickbox"}
-
-            Logger.step(self.STEP, self.NAME, True, "Not disposable")
-            return {"passed": True}
-
-        except requests.exceptions.Timeout:
-            Logger.skip(self.STEP, self.NAME, "API timeout — trusting MX")
-            return {"passed": True, "skipped": True}
-
-        except Exception as e:
-            Logger.skip(self.STEP, self.NAME, f"API unavailable ({e}) — trusting MX")
-            return {"passed": True, "skipped": True}
+        # Check if we have at least one available result; if all APIs were
+        # unavailable we still pass (fail-open) so a network hiccup doesn't
+        # silently block every legitimate address.
+        available_count = sum(1 for r in results if r["available"])
+        if available_count == 0:
+            Logger.step(self.STEP, self.NAME, True,
+                        "all APIs unavailable — trusting MX records")
+        else:
+            Logger.step(self.STEP, self.NAME, True,
+                        f"not disposable ({available_count}/4 APIs responded)")
+        print("\n".join(lines))
+        return {"passed": True}
 
 
 # =============================================================================
-# EMAIL VERIFIER — orchestrates all 6 steps
+# EMAIL VERIFIER — orchestrates all steps
 # =============================================================================
 
 class EmailVerifier:
     """
-    Main class. Runs all 6 verification steps in order.
+    Main class. Runs all verification steps in order.
     Stops as soon as a step fails (early exit = fast).
 
-    Major providers (Gmail, Outlook, Google Workspace, Zoho, M365) are
-    accepted after Step 4 — Steps 5 & 6 are skipped entirely, saving
-    two API round-trips per address.
+    Flow:
+        Step 1  Syntax check
+        Step 2  Merged static blocklist (3 sources, ~150k+ domains)
+        Step 3  DNS / MX records
+        Step 4  Trusted provider detection → early accept if matched
+        Step 5  Four free keyless APIs run concurrently
 
-    Usage :
-        verifier = EmailVerifier()          # loads blocklist once
+    Usage:
+        verifier = EmailVerifier()          # loads blocklists once
         result   = verifier.verify("x@y.com")
         ok       = verifier.check("x@y.com")  # returns bool directly
     """
@@ -424,21 +605,18 @@ class EmailVerifier:
         self.step_list   = StepStaticBlocklist(blocklist)
         self.step_dns    = StepDNS()
         self.step_prov   = StepProvider()
-        self.step_disify = StepDisify()
-        self.step_kickbx = StepKickbox()
+        self.step_apis   = StepApiChecks()
 
     # ── private helpers ────────────────────────────────────────────────────
 
     def _skip_from(self, from_step: int):
-        """Logs all remaining steps as skipped."""
         steps = {
-            2: "Static blocklist",
-            3: "DNS / MX records",
-            4: "Provider check",
-            5: "Disify API",
-            6: "Kickbox API",
+            2: ("Static blocklist (×3)",   StepStaticBlocklist),
+            3: ("DNS / MX records",         StepDNS),
+            4: ("Provider check",           StepProvider),
+            5: ("API checks (×4, async)",   StepApiChecks),
         }
-        for number, name in steps.items():
+        for number, (name, _) in steps.items():
             if number >= from_step:
                 Logger.skip(number, name, "skipped")
 
@@ -454,7 +632,7 @@ class EmailVerifier:
 
     def verify(self, email: str) -> dict:
         """
-        Runs all steps and returns a result dict :
+        Runs all steps and returns a result dict:
             { "valid": bool, "reason": str }
         """
         Logger.header(email)
@@ -468,7 +646,7 @@ class EmailVerifier:
         email  = s1["email"]
         domain = email.split("@")[1]
 
-        # Step 2 — Static blocklist
+        # Step 2 — Merged static blocklist
         s2 = self.step_list.run(domain)
         if not s2["passed"]:
             self._skip_from(3)
@@ -484,24 +662,18 @@ class EmailVerifier:
 
         # Step 4 — Provider check
         # ─────────────────────────────────────────────────────────────────
-        # Major provider detected → trusted infrastructure, no API checks
-        # needed. Skip Steps 5 & 6 entirely and accept immediately.
+        # Trusted infrastructure detected → accept immediately.
+        # Step 5 (API checks) is skipped entirely — saves 4 API round-trips.
         # ─────────────────────────────────────────────────────────────────
         s4 = self.step_prov.run(domain, mx_server)
         if s4["is_major_provider"]:
-            self._skip_from(5)
+            Logger.skip(5, "API checks (×4, async)", "skipped — major provider trusted")
             return self._accept("major_provider_trusted")
 
-        # Step 5 — Disify API  (only for unknown providers)
-        s5 = self.step_disify.run(email)
+        # Step 5 — Four free APIs run concurrently
+        s5 = self.step_apis.run(email, domain)
         if not s5["passed"]:
-            Logger.skip(6, "Kickbox API", "skipped — already rejected by Disify")
             return self._reject(s5["reason"])
-
-        # Step 6 — Kickbox API  (only for unknown providers)
-        s6 = self.step_kickbx.run(domain)
-        if not s6["passed"]:
-            return self._reject(s6["reason"])
 
         return self._accept("all_checks_passed")
 
@@ -554,17 +726,15 @@ class EmailRunner:
 if __name__ == "__main__":
 
     test_emails = [
-        "utilisateur@gmail.com",            # valid   — major provider
-        "quelquun@outlook.com",             # valid   — major provider
-        "contact@python.org",               # valid   — professional domain
-        "info@heuristik.tech",              # valid   — Google Workspace hosted
-        "pasdarobase.com",                  # invalid — no @ sign
-        "double@@domaine.com",              # invalid — bad syntax
-        "test@domainequiexistepas123.xyz",  # invalid — domain doesn't exist
-        "temp@mailinator.com",              # invalid — static blocklist
-        "jetable@yopmail.com",              # invalid — static blocklist
-        "lanetta54@dependity.com",          # invalid — caught by Kickbox
-        "hello@takpay.com",                 # invalid — no MX records
+        "contact@saastrail.com",
+        "info@cloudeasy.io",
+        "hola@dosmedia.es",
+        "amine.belkeziz@upline.co.ma",
+        "nachrane@krafteurope.com",
+        "careers@gft.com",
+        "alachkar@atento.ma",
+        "bouchaib.nassef@oilibya.ma",
+        "benhammou@mail.cbi.net.ma",
     ]
 
     runner = EmailRunner()
