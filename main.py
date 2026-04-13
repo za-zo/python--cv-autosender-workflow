@@ -189,7 +189,7 @@ def fail_and_notify(
         print(f"  -> [WARN] Failed to mark job as failed: {mask(str(e))}")
 
     pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
-    if pair_e and pair_p and config.NOTIFICATION_EMAIL:
+    if pair_e and pair_p and config.ENABLE_NOTIFICATIONS and config.NOTIFICATION_EMAIL:
         try:
             ctx = build_context_html(
                 job,
@@ -233,7 +233,10 @@ def fail_and_notify(
                 except Exception as fe:
                     print(f"  -> [WARN] Fallback notification also failed: {mask(str(fe))}")
     else:
-        print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
+        if not config.ENABLE_NOTIFICATIONS:
+            print("  -> Notifications disabled, skipping failure notification email.")
+        else:
+            print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
 
     print(f"  -> [FAIL] {mask(reason)}")
     exit(1)
@@ -988,57 +991,62 @@ def main():
 
         print("  ")
         print("[Step 19] Sending confirmation email...")
-        try:
-            confirm_subject = (
-                f"✅ CV envoyé — {job.get('targetPosition', '')} @ {company.get('name', '')}"
-            )
-            print(f"  -> Confirmation subject: {mask(confirm_subject)}")
-            ctx = build_context_html(
-                job,
-                company=company,
-                cv_provider=cv_provider,
-                msg_provider=msg_provider,
-                cv_api_key=cv_api_key,
-                msg_api_key=msg_api_key,
-                email_config=email_config,
-            )
-            confirm_body = (
-                f"<h2>✅ CV envoyé avec succès !</h2>"
-                f"<p>Votre CV a été envoyé à l'entreprise <strong>{_html_escape(company.get('name', ''))}</strong>.</p>"
-                f"{format_smtp_line(smtp_email)}"
-                f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
-                f"<hr/>"
-                f"{ctx}"
-                f"<hr/><h3>Message envoyé</h3>"
-                f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
-                f"{_html_escape(message_text)}</pre>"
-            )
-            print(f"  -> Sending confirmation to: {mask(config.NOTIFICATION_EMAIL, 'email')}...")
-            send_email(
-                config.NOTIFICATION_EMAIL,
-                confirm_subject,
-                confirm_body,
-                smtp_email,
-                smtp_password,
-                attachment_path=pdf_path,
-            )
-            print(f"  -> Confirmation sent successfully (to: {mask(config.NOTIFICATION_EMAIL, 'email')})")
-        except SystemExit:
-            raise
-        except Exception as e:
-            print(f"  -> [WARN] [Step 19] Confirmation email failed (job already sent): {mask(str(e))}")
+        if not config.ENABLE_NOTIFICATIONS:
+            print("  -> Notifications disabled, skipping confirmation email.")
+        else:
             try:
-                ce, cp = _smtp_pair(smtp_email, smtp_password)
-                if ce and cp and config.NOTIFICATION_EMAIL:
+                confirm_subject = (
+                    f"✅ CV envoyé — {job.get('targetPosition', '')} @ {company.get('name', '')}"
+                )
+                ctx = build_context_html(
+                    job,
+                    company=company,
+                    cv_provider=cv_provider,
+                    msg_provider=msg_provider,
+                    cv_api_key=cv_api_key,
+                    msg_api_key=msg_api_key,
+                    email_config=email_config,
+                )
+                confirm_body = (
+                    f"<h2>✅ CV envoyé avec succès !</h2>"
+                    f"<p>Votre CV a été envoyé à l'entreprise <strong>{_html_escape(company.get('name', ''))}</strong>.</p>"
+                    f"{format_smtp_line(smtp_email)}"
+                    f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
+                    f"<hr/>"
+                    f"{ctx}"
+                    f"<hr/><h3>Message envoyé</h3>"
+                    f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
+                    f"{_html_escape(message_text)}</pre>"
+                )
+                if not config.NOTIFICATION_EMAIL:
+                    print("  -> [WARN] NOTIFICATION_EMAIL is not set, skipping confirmation email.")
+                else:
+                    print(f"  -> Sending confirmation to: {mask(config.NOTIFICATION_EMAIL, 'email')}...")
                     send_email(
                         config.NOTIFICATION_EMAIL,
-                        "⚠️ Confirmation email failed (job was sent)",
-                        f"<p>{_html_escape(e)}</p><p>Check logs; job status should already be <code>sent</code>.</p>",
-                        ce,
-                        cp,
+                        confirm_subject,
+                        confirm_body,
+                        smtp_email,
+                        smtp_password,
+                        attachment_path=pdf_path,
                     )
-            except Exception:
-                pass
+                    print(f"  -> Confirmation sent successfully (to: {mask(config.NOTIFICATION_EMAIL, 'email')})")
+            except SystemExit:
+                raise
+            except Exception as e:
+                print(f"  -> [WARN] [Step 19] Confirmation email failed (job already sent): {mask(str(e))}")
+                try:
+                    ce, cp = _smtp_pair(smtp_email, smtp_password)
+                    if ce and cp and config.NOTIFICATION_EMAIL:
+                        send_email(
+                            config.NOTIFICATION_EMAIL,
+                            "⚠️ Confirmation email failed (job was sent)",
+                            f"<p>{_html_escape(e)}</p><p>Check logs; job status should already be <code>sent</code>.</p>",
+                            ce,
+                            cp,
+                        )
+                except Exception:
+                    pass
 
         print("---------------")
         print(f"✅ DONE — {mask(job_target_position)} @ {mask(company.get('name', ''))}")

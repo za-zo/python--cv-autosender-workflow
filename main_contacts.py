@@ -127,7 +127,7 @@ def fail_and_notify(
             print(f"  -> [WARN] Failed to mark contact message as failed: {mask(str(e))}")
 
     pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
-    if pair_e and pair_p and config.NOTIFICATION_EMAIL:
+    if pair_e and pair_p and config.ENABLE_NOTIFICATIONS and config.NOTIFICATION_EMAIL:
         try:
             ctx = build_contact_context_html(
                 msg,
@@ -171,7 +171,10 @@ def fail_and_notify(
                 except Exception as fe:
                     print(f"  -> [WARN] Fallback notification also failed: {mask(str(fe))}")
     else:
-        print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
+        if not config.ENABLE_NOTIFICATIONS:
+            print("  -> Notifications disabled, skipping failure notification email.")
+        else:
+            print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
 
     print(f"  -> [FAIL] {mask(reason)}")
     sys.exit(1)
@@ -594,7 +597,9 @@ def main():
                 f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
                 f"{_html_escape(message_text)}</pre>"
             )
-            if not config.NOTIFICATION_EMAIL:
+            if not config.ENABLE_NOTIFICATIONS:
+                print("  -> Notifications disabled, skipping confirmation email.")
+            elif not config.NOTIFICATION_EMAIL:
                 print("  -> [WARN] NOTIFICATION_EMAIL is not set, skipping confirmation email.")
             else:
                 pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)

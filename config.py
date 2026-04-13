@@ -4,6 +4,7 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # ── Notifications ─────────────────────────────────────────────────────────
+ENABLE_NOTIFICATIONS = os.getenv("ENABLE_NOTIFICATIONS", "false").lower() == "true"
 NOTIFICATION_EMAIL = os.getenv("NOTIFICATION_EMAIL")
 # Used when job SMTP is not available yet (e.g. failure before email claim)
 NOTIFICATION_SMTP_EMAIL = os.getenv("NOTIFICATION_SMTP_EMAIL")
