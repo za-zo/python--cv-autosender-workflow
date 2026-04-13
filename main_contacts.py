@@ -126,55 +126,56 @@ def fail_and_notify(
         except Exception as e:
             print(f"  -> [WARN] Failed to mark contact message as failed: {mask(str(e))}")
 
-    pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
-    if pair_e and pair_p and config.ENABLE_NOTIFICATIONS and config.NOTIFICATION_EMAIL:
-        try:
-            ctx = build_contact_context_html(
-                msg,
-                profile=profile,
-                contact=contact,
-                email_config=email_config,
-                msg_provider=msg_provider,
-                msg_api_key=msg_api_key,
-            )
-            body = (
-                f"<h2>❌ Contact message failed</h2>"
-                f"<p><strong>Reason:</strong> {_html_escape(reason)}</p>"
-                f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
-                f"<hr/>"
-                f"{ctx}"
-                f"{format_updates_html(updates)}"
-            )
-            subj = "❌ Contact message failed — " + reason.replace("\n", " ").strip()[:200]
-            send_email(
-                config.NOTIFICATION_EMAIL,
-                subj,
-                body,
-                pair_e,
-                pair_p,
-            )
-        except Exception as e:
-            print(f"  -> [WARN] Failed to send failure notification via primary SMTP: {mask(str(e))}")
-            # Fallback to global notification SMTP if different
-            ne, np = config.NOTIFICATION_SMTP_EMAIL, config.NOTIFICATION_SMTP_PASSWORD
-            if ne and np and (ne != pair_e or np != pair_p):
-                print(f"  -> Attempting fallback notification via global SMTP {mask(ne, 'email')}...")
-                try:
-                    send_email(
-                        config.NOTIFICATION_EMAIL,
-                        subj,
-                        body,
-                        ne,
-                        np,
-                    )
-                    print("  -> Fallback notification sent.")
-                except Exception as fe:
-                    print(f"  -> [WARN] Fallback notification also failed: {mask(str(fe))}")
+    if not config.ENABLE_NOTIFICATIONS:
+        print("  -> Notifications disabled, skipping failure notification email.")
+    elif not config.NOTIFICATION_EMAIL:
+        print("  -> [WARN] NOTIFICATION_EMAIL is not set, skipping failure notification email.")
     else:
-        if not config.ENABLE_NOTIFICATIONS:
-            print("  -> Notifications disabled, skipping failure notification email.")
+        pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
+        if pair_e and pair_p:
+            try:
+                ctx = build_contact_context_html(
+                    msg,
+                    profile=profile,
+                    contact=contact,
+                    email_config=email_config,
+                    msg_provider=msg_provider,
+                    msg_api_key=msg_api_key,
+                )
+                body = (
+                    f"<h2>❌ Contact message failed</h2>"
+                    f"<p><strong>Reason:</strong> {_html_escape(reason)}</p>"
+                    f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
+                    f"<hr/>"
+                    f"{ctx}"
+                    f"{format_updates_html(updates)}"
+                )
+                subj = "❌ Contact message failed — " + reason.replace("\n", " ").strip()[:200]
+                send_email(
+                    config.NOTIFICATION_EMAIL,
+                    subj,
+                    body,
+                    pair_e,
+                    pair_p,
+                )
+            except Exception as e:
+                print(f"  -> [WARN] Failed to send failure notification via primary SMTP: {mask(str(e))}")
+                ne, np = config.NOTIFICATION_SMTP_EMAIL, config.NOTIFICATION_SMTP_PASSWORD
+                if ne and np and (ne != pair_e or np != pair_p):
+                    print(f"  -> Attempting fallback notification via global SMTP {mask(ne, 'email')}...")
+                    try:
+                        send_email(
+                            config.NOTIFICATION_EMAIL,
+                            subj,
+                            body,
+                            ne,
+                            np,
+                        )
+                        print("  -> Fallback notification sent.")
+                    except Exception as fe:
+                        print(f"  -> [WARN] Fallback notification also failed: {mask(str(fe))}")
         else:
-            print("  -> [WARN] No SMTP credentials or NOTIFICATION_EMAIL, skipping failure notification email.")
+            print("  -> [WARN] No SMTP credentials, skipping failure notification email.")
 
     print(f"  -> [FAIL] {mask(reason)}")
     sys.exit(1)
@@ -568,40 +569,40 @@ def main():
 
         print("  ")
         print("[Step 11] Sending confirmation email...")
-        try:
-            contact_email = contact.get("email", "")
-            contact_name = (contact.get("complete_name") or "").strip()
-            if contact_name:
-                confirm_subject = f"✅ Contact message sent — {contact_name} <{contact_email}>".strip()
-            else:
-                confirm_subject = f"✅ Contact message sent — <{contact_email}>".strip()
-            
-            ctx = build_contact_context_html(
-                msg,
-                profile=profile,
-                contact=contact,
-                email_config=email_config,
-                msg_provider=msg_provider,
-                msg_api_key=msg_api_key,
-            )
-            confirm_body = (
-                f"<h2>✅ Contact message sent successfully!</h2>"
-                f"<p>Recipient: <strong>{_html_escape(contact_name) if contact_name else '—'}</strong> "
-                f"&lt;{_html_escape(contact_email)}&gt;</p>"
-                f"{format_smtp_line(smtp_email)}"
-                f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
-                f"<hr/>"
-                f"{ctx}"
-                f"{format_updates_html(updates_made)}"
-                f"<hr/><h3>Message sent</h3>"
-                f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
-                f"{_html_escape(message_text)}</pre>"
-            )
-            if not config.ENABLE_NOTIFICATIONS:
-                print("  -> Notifications disabled, skipping confirmation email.")
-            elif not config.NOTIFICATION_EMAIL:
-                print("  -> [WARN] NOTIFICATION_EMAIL is not set, skipping confirmation email.")
-            else:
+        if not config.ENABLE_NOTIFICATIONS:
+            print("  -> Notifications disabled, skipping confirmation email.")
+        elif not config.NOTIFICATION_EMAIL:
+            print("  -> [WARN] NOTIFICATION_EMAIL is not set, skipping confirmation email.")
+        else:
+            try:
+                contact_email = contact.get("email", "")
+                contact_name = (contact.get("complete_name") or "").strip()
+                if contact_name:
+                    confirm_subject = f"✅ Contact message sent — {contact_name} <{contact_email}>".strip()
+                else:
+                    confirm_subject = f"✅ Contact message sent — <{contact_email}>".strip()
+                
+                ctx = build_contact_context_html(
+                    msg,
+                    profile=profile,
+                    contact=contact,
+                    email_config=email_config,
+                    msg_provider=msg_provider,
+                    msg_api_key=msg_api_key,
+                )
+                confirm_body = (
+                    f"<h2>✅ Contact message sent successfully!</h2>"
+                    f"<p>Recipient: <strong>{_html_escape(contact_name) if contact_name else '—'}</strong> "
+                    f"&lt;{_html_escape(contact_email)}&gt;</p>"
+                    f"{format_smtp_line(smtp_email)}"
+                    f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
+                    f"<hr/>"
+                    f"{ctx}"
+                    f"{format_updates_html(updates_made)}"
+                    f"<hr/><h3>Message sent</h3>"
+                    f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
+                    f"{_html_escape(message_text)}</pre>"
+                )
                 pair_e, pair_p = _smtp_pair(smtp_email, smtp_password)
                 if pair_e and pair_p:
                     send_email(
@@ -615,8 +616,8 @@ def main():
                     print(f"  -> Confirmation sent successfully (to: {mask(config.NOTIFICATION_EMAIL, 'email')})")
                 else:
                     print("  -> [WARN] No SMTP credentials for confirmation email.")
-        except Exception as e:
-            print(f"  -> [WARN] [Step 11] Confirmation email failed (message already sent): {mask(str(e))}")
+            except Exception as e:
+                print(f"  -> [WARN] [Step 11] Confirmation email failed (message already sent): {mask(str(e))}")
 
         print("---------------")
         print(f"✅ DONE — sent to {mask(contact.get('email', ''), 'email')}")
