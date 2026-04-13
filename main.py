@@ -16,38 +16,18 @@ from ai.base import (
 )
 from db import ai_api_keys, companies, emails, jobs, profiles, providers, email_providers
 from email_verifier import EmailVerifier
-from helpers.email_sender import send_email, send_email_via_api
+from helpers.email_sender import send_email, send_email_via_api, workflow_send_email
 from helpers.html_cv import generate_html_cv
 from helpers.notification_body import (
     build_context_html,
     format_sender_line,
     format_updates_html,
 )
+from helpers.utils import mask, html_escape, call_ai_with_retries, smtp_pair
 
 
-def mask(val, kind="str"):
-    """Mask sensitive values when config.MASK_LOGS is enabled."""
-    if not config.MASK_LOGS:
-        return val
-    s = str(val) if val else ""
-    if not s:
-        return ""
-    if kind == "email":
-        return "***@***.***"
-    if kind == "secret":
-        return "********"
-    if kind == "json":
-        return "[MASKED]"
-    return "***"
-
-
-def _html_escape(s):
-    return (
-        str(s)
-        .replace("&", "&amp;")
-        .replace("<", "&lt;")
-        .replace(">", "&gt;")
-    )
+# Note: common utility functions (mask, html_escape, call_ai_with_retries, smtp_pair)
+# are now imported from helpers.utils and helpers.email_sender.
 
 
 _current_job_id = None
@@ -91,13 +71,7 @@ def _release_claimed_resources():
         _claimed_email_id = None
 
 
-def _smtp_pair(smtp_email, smtp_password):
-    if smtp_email and smtp_password:
-        return smtp_email, smtp_password
-    ne, np = config.NOTIFICATION_SMTP_EMAIL, config.NOTIFICATION_SMTP_PASSWORD
-    if ne and np:
-        return ne, np
-    return None, None
+# _reset_claimed_ids, _release_claimed_resources are kept locally for state management.
 
 
 def _notify_kw(
@@ -127,36 +101,7 @@ def _notify_kw(
     }
 
 
-def workflow_send_email(to, subject, body, email_config, email_provider=None, attachment_path=None, profile=None):
-    """Helper to send email using either SMTP or API based on config."""
-    config_type = email_config.get("configType", "smtp")
-    email_address = email_config.get("emailAddress")
-    
-    sender_name = None
-    if profile:
-        fn = profile.get("firstName", "").strip()
-        ln = profile.get("lastName", "").strip()
-        if fn or ln:
-            sender_name = f"{fn} {ln}".strip()
-            
-    if config_type == "api":
-        provider_name = email_provider.get("name", "Unknown") if email_provider else "Unknown"
-        api_key = email_config.get("apiKey")
-        return send_email_via_api(provider_name, to, subject, body, api_key, email_address, attachment_path, sender_name=sender_name)
-    else:
-        # SMTP
-        smtp_user = email_config.get("smtpUser")
-        smtp_pass = email_config.get("smtpPassword")
-        # Use server/port from config if present, otherwise from provider, otherwise default
-        smtp_server = email_config.get("smtpServer")
-        if not smtp_server and email_provider:
-            smtp_server = email_provider.get("smtpServer")
-        
-        smtp_port = email_config.get("smtpPort")
-        if not smtp_port and email_provider:
-            smtp_port = email_provider.get("smtpPort")
-            
-        return send_email(to, subject, body, email_address, smtp_user, smtp_pass, smtp_server, smtp_port, attachment_path, sender_name=sender_name)
+# workflow_send_email is now imported from helpers.email_sender.
 
 
 def _handle_exit(signum, frame):
@@ -245,7 +190,7 @@ def fail_and_notify(
                 )
                 body = (
                     f"<h2>❌ Job Failed</h2>"
-                    f"<p><strong>Reason:</strong> {_html_escape(reason)}</p>"
+                    f"<p><strong>Reason:</strong> {html_escape(reason)}</p>"
                     f"<hr/>"
                     f"{ctx}"
                     f"{format_updates_html(updates)}"
@@ -282,7 +227,7 @@ def fail_and_notify(
             if ne and np:
                 try:
                     subj = "❌ Job Failed (no email config) — " + reason.replace("\n", " ").strip()[:200]
-                    body = f"<h2>❌ Job Failed</h2><p><strong>Reason:</strong> {_html_escape(reason)}</p>{format_updates_html(updates)}"
+                    body = f"<h2>❌ Job Failed</h2><p><strong>Reason:</strong> {html_escape(reason)}</p>{format_updates_html(updates)}"
                     send_email(config.NOTIFICATION_EMAIL, subj, body, ne, ne, np)
                 except Exception as e:
                     print(f"  -> [WARN] Failed to send failure notification via global SMTP: {mask(str(e))}")
@@ -401,18 +346,7 @@ def _fail_msg_key_claim(job, raw_key_id, email_config, email_provider, cv_api_ke
         )
 
 
-def call_ai_with_retries(provider_module, api_key, system_msg, user_msg, model_name=None):
-    """Call AI provider with retry logic."""
-    last_error = None
-    for attempt in range(1, config.MAX_RETRIES + 1):
-        try:
-            return provider_module.call(api_key, system_msg, user_msg, model_name=model_name)
-        except Exception as e:
-            last_error = e
-            if attempt < config.MAX_RETRIES:
-                print(f"  -> Retry {attempt}/{config.MAX_RETRIES} failed, waiting {config.RETRY_WAIT_SECONDS}s...")
-                time.sleep(config.RETRY_WAIT_SECONDS)
-    raise last_error
+# call_ai_with_retries is now imported from helpers.utils.
 
 
 def main():
@@ -1014,7 +948,7 @@ def main():
             workflow_send_email(
                 company["email"],
                 subject,
-                f"<pre>{_html_escape(message_text)}</pre>",
+                f"<pre>{html_escape(message_text)}</pre>",
                 email_config,
                 email_provider,
                 attachment_path=pdf_path,
@@ -1087,14 +1021,14 @@ def main():
                 )
                 confirm_body = (
                     f"<h2>✅ CV envoyé avec succès !</h2>"
-                    f"<p>Votre CV a été envoyé à l'entreprise <strong>{_html_escape(company.get('name', ''))}</strong>.</p>"
+                    f"<p>Votre CV a été envoyé à l'entreprise <strong>{html_escape(company.get('name', ''))}</strong>.</p>"
                     f"{format_sender_line(smtp_email, email_provider)}"
-                    f"<p>📅 Date : {_html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
+                    f"<p>📅 Date : {html_escape(time.strftime('%Y-%m-%d %H:%M:%S'))}</p>"
                     f"<hr/>"
                     f"{ctx}"
                     f"<hr/><h3>Message envoyé</h3>"
                     f"<pre style=\"background:#f5f5f5;padding:12px;border-radius:6px;font-size:13px;\">"
-                    f"{_html_escape(message_text)}</pre>"
+                    f"{html_escape(message_text)}</pre>"
                 )
                 print(f"  -> Sending confirmation to: {mask(config.NOTIFICATION_EMAIL, 'email')}...")
                 workflow_send_email(
@@ -1112,12 +1046,12 @@ def main():
             except Exception as e:
                 print(f"  -> [WARN] [Step 19] Confirmation email failed (job already sent): {mask(str(e))}")
                 try:
-                    ce, cp = _smtp_pair(smtp_email, smtp_password)
+                    ce, cp = smtp_pair(smtp_email, smtp_password)
                     if ce and cp and config.NOTIFICATION_EMAIL:
                         send_email(
                             config.NOTIFICATION_EMAIL,
                             "⚠️ Confirmation email failed (job was sent)",
-                            f"<p>{_html_escape(e)}</p><p>Check logs; job status should already be <code>sent</code>.</p>",
+                            f"<p>{html_escape(e)}</p><p>Check logs; job status should already be <code>sent</code>.</p>",
                             ce,
                             ce,
                             cp,

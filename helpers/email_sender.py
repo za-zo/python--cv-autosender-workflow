@@ -78,4 +78,37 @@ def send_email_via_api(provider_name, to, subject, body_html, api_key, sender_em
     if provider_name.lower() == "brevo":
         return send_email_brevo_api(to, subject, body_html, api_key, sender_email, attachment_path, sender_name=sender_name)
     else:
+        # In the future, add more providers here (e.g., SendGrid, Mailgun)
         raise ValueError(f"Unsupported API email provider: {provider_name}")
+
+
+def workflow_send_email(to, subject, body, email_config, email_provider=None, attachment_path=None, profile=None):
+    """Unified helper to send email using either SMTP or API based on config."""
+    config_type = email_config.get("configType", "smtp")
+    email_address = email_config.get("emailAddress")
+    
+    sender_name = None
+    if profile:
+        fn = profile.get("firstName", "").strip()
+        ln = profile.get("lastName", "").strip()
+        if fn or ln:
+            sender_name = f"{fn} {ln}".strip()
+            
+    if config_type == "api":
+        provider_name = email_provider.get("name", "Unknown") if email_provider else "Unknown"
+        api_key = email_config.get("apiKey")
+        return send_email_via_api(provider_name, to, subject, body, api_key, email_address, attachment_path, sender_name=sender_name)
+    else:
+        # SMTP
+        smtp_user = email_config.get("smtpUser")
+        smtp_pass = email_config.get("smtpPassword")
+        # Use server/port from config if present, otherwise from provider, otherwise default
+        smtp_server = email_config.get("smtpServer")
+        if not smtp_server and email_provider:
+            smtp_server = email_provider.get("smtpServer")
+        
+        smtp_port = email_config.get("smtpPort")
+        if not smtp_port and email_provider:
+            smtp_port = email_provider.get("smtpPort")
+            
+        return send_email(to, subject, body, email_address, smtp_user, smtp_pass, smtp_server, smtp_port, attachment_path, sender_name=sender_name)
