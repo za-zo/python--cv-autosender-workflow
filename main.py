@@ -110,6 +110,7 @@ def _notify_kw(
     msg_provider=None,
     company=None,
     email_provider=None,
+    profile=None,
 ):
     """Keyword args for fail_and_notify from current workflow state."""
     return {
@@ -122,17 +123,26 @@ def _notify_kw(
         "msg_provider": msg_provider,
         "company": company,
         "email_provider": email_provider,
+        "profile": profile,
     }
 
 
-def workflow_send_email(to, subject, body, email_config, email_provider=None, attachment_path=None):
+def workflow_send_email(to, subject, body, email_config, email_provider=None, attachment_path=None, profile=None):
     """Helper to send email using either SMTP or API based on config."""
     config_type = email_config.get("configType", "smtp")
     email_address = email_config.get("emailAddress")
+    
+    sender_name = None
+    if profile:
+        fn = profile.get("firstName", "").strip()
+        ln = profile.get("lastName", "").strip()
+        if fn or ln:
+            sender_name = f"{fn} {ln}".strip()
+            
     if config_type == "api":
         provider_name = email_provider.get("name", "Unknown") if email_provider else "Unknown"
         api_key = email_config.get("apiKey")
-        return send_email_via_api(provider_name, to, subject, body, api_key, email_address, attachment_path)
+        return send_email_via_api(provider_name, to, subject, body, api_key, email_address, attachment_path, sender_name=sender_name)
     else:
         # SMTP
         smtp_user = email_config.get("smtpUser")
@@ -146,7 +156,7 @@ def workflow_send_email(to, subject, body, email_config, email_provider=None, at
         if not smtp_port and email_provider:
             smtp_port = email_provider.get("smtpPort")
             
-        return send_email(to, subject, body, email_address, smtp_user, smtp_pass, smtp_server, smtp_port, attachment_path)
+        return send_email(to, subject, body, email_address, smtp_user, smtp_pass, smtp_server, smtp_port, attachment_path, sender_name=sender_name)
 
 
 def _handle_exit(signum, frame):
@@ -181,6 +191,7 @@ def fail_and_notify(
     msg_api_key=None,
     email_config=None,
     email_provider=None,
+    profile=None,
     updates_made=None,
 ):
     """Mark job as failed, optionally deactivate API key/email, send error email."""
@@ -230,6 +241,7 @@ def fail_and_notify(
                     cv_api_key=cv_api_key,
                     msg_api_key=msg_api_key,
                     email_config=email_config,
+                    email_provider=email_provider,
                 )
                 body = (
                     f"<h2>❌ Job Failed</h2>"
@@ -245,6 +257,7 @@ def fail_and_notify(
                     body,
                     email_config,
                     email_provider,
+                    profile=profile,
                 )
             except Exception as e:
                 print(f"  -> [WARN] Failed to send failure notification via main email account: {mask(str(e))}")
@@ -1005,6 +1018,7 @@ def main():
                 email_config,
                 email_provider,
                 attachment_path=pdf_path,
+                profile=profile,
             )
             print(f"  -> Email sent successfully via {email_config.get('configType', 'smtp')}")
         except SystemExit:
@@ -1069,6 +1083,7 @@ def main():
                     cv_api_key=cv_api_key,
                     msg_api_key=msg_api_key,
                     email_config=email_config,
+                    email_provider=email_provider,
                 )
                 confirm_body = (
                     f"<h2>✅ CV envoyé avec succès !</h2>"
@@ -1089,6 +1104,7 @@ def main():
                     email_config,
                     email_provider,
                     attachment_path=pdf_path,
+                    profile=profile,
                 )
                 print(f"  -> Confirmation sent successfully (to: {mask(config.NOTIFICATION_EMAIL, 'email')})")
             except SystemExit:

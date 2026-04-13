@@ -79,14 +79,22 @@ def _notify_kw(
     }
 
 
-def workflow_send_email(to, subject, body, email_config, email_provider=None, attachment_path=None):
+def workflow_send_email(to, subject, body, email_config, email_provider=None, attachment_path=None, profile=None):
     """Helper to send email using either SMTP or API based on config."""
     email_address = email_config.get("emailAddress")
     config_type = email_config.get("configType", "smtp")
+    
+    sender_name = None
+    if profile:
+        fn = profile.get("firstName", "").strip()
+        ln = profile.get("lastName", "").strip()
+        if fn or ln:
+            sender_name = f"{fn} {ln}".strip()
+            
     if config_type == "api":
         provider_name = email_provider.get("name", "Unknown") if email_provider else "Unknown"
         api_key = email_config.get("apiKey")
-        return send_email_via_api(provider_name, to, subject, body, api_key, email_address, attachment_path)
+        return send_email_via_api(provider_name, to, subject, body, api_key, email_address, attachment_path, sender_name=sender_name)
     else:
         # SMTP
         smtp_user = email_config.get("smtpUser")
@@ -100,7 +108,7 @@ def workflow_send_email(to, subject, body, email_config, email_provider=None, at
         if not smtp_port and email_provider:
             smtp_port = email_provider.get("smtpPort")
             
-        return send_email(to, subject, body, email_address, smtp_user, smtp_pass, smtp_server, smtp_port, attachment_path)
+        return send_email(to, subject, body, email_address, smtp_user, smtp_pass, smtp_server, smtp_port, attachment_path, sender_name=sender_name)
 
 
 def fail_and_notify(
@@ -184,6 +192,7 @@ def fail_and_notify(
                     body,
                     email_config,
                     email_provider,
+                    profile=profile,
                 )
             except Exception as e:
                 print(f"  -> [WARN] Failed to send failure notification via main email account: {mask(str(e))}")
@@ -601,6 +610,7 @@ def main():
                 email_config,
                 email_provider,
                 attachment_path=attachment,
+                profile=profile,
             )
             print(f"  -> Email sent successfully via {email_config.get('configType', 'smtp')} to {mask(contact['email'], 'email')}")
         except Exception as e:
@@ -678,6 +688,7 @@ def main():
                     email_config,
                     email_provider,
                     attachment_path=attachment,
+                    profile=profile,
                 )
                 print(f"  -> Confirmation sent successfully (to: {mask(config.NOTIFICATION_EMAIL, 'email')})")
             except Exception as e:
